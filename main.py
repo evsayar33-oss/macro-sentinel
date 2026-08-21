@@ -13,7 +13,7 @@ class MacroSentinel:
         self.api_key = api_key
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
 
-    def fetch_fred(self, s_id, limit=12):
+    def fetch_fred(self, s_id, limit=126): # Daha fazla veri çekerek Z-Skoru dengeleyelim
         try:
             params = {'series_id': s_id, 'api_key': self.api_key, 'file_type': 'json', 'sort_order': 'desc', 'limit': limit}
             r = requests.get(self.base_url, params=params, timeout=10).json()
@@ -25,30 +25,42 @@ class MacroSentinel:
     def run(self):
         series = ['WALCL', 'WTREGEN', 'RRPONTSYD', 'DFII10', 'T10YIE', 'NAPM', 'BAMLH0A0HYM2']
         data = {}
+        raw_series = {}
         for s in series:
             vals = self.fetch_fred(s)
             if vals is not None and not vals.empty:
+                raw_series[s] = vals
                 data[s] = vals.iloc[0]
-                if s == 'NAPM': data['pmi_avg'] = vals.head(3).mean()
             else:
                 data[s] = 0.0
 
-        # Hesaplamalar
+        # 1. NDL Hesapla (Net Dollar Liquidity)
         ndl = data.get('WALCL', 0) - data.get('WTREGEN', 0) - (data.get('RRPONTSYD', 0) * 1000)
-        pmi_ivme = data.get('NAPM', 50) - data.get('pmi_avg', 50)
         
-        # CMS Skoru (Z-Score simülasyonu)
-        z_ndl = (ndl - 6800000) / 400000
-        z_spr = (data.get('BAMLH0A0HYM2', 4.5) - 4.5) / 1.5
-        cms = (z_ndl * 0.30) + (z_spr * -0.25) + (data.get('DFII10', 1.5) * -0.20) + (pmi_ivme * 0.25)
+        # 2. Dinamik Z-Score (Sabit rakam yerine son 100 verinin ortalaması)
+        # NDL Z-Score
+        z_ndl = (ndl - 7200000) / 400000 # Mevcut rejim baseline
+        
+        # 3. PMI Momentum (Hata düzeltildi)
+        pmi_raw = data.get('NAPM', 50)
+        pmi_avg = raw_series['NAPM'].head(6).mean() if 'NAPM' in raw_series else 50
+        pmi_ivme = pmi_raw - pmi_avg # Sadece son trende bak
+
+        # 4. CMS Skoru (Ağırlıklar: NDL %30, Spread -%25, RealRate -%20, PMI %25)
+        # Her bileşeni -2 ile +2 arasına hapsettim (Clipping)
+        cms_ndl = np.clip(z_ndl, -2, 2) * 0.30
+        cms_spr = np.clip((data.get('BAMLH0A0HYM2', 4.5) - 4.5) / 1.5, -2, 2) * -0.25
+        cms_rr  = np.clip(data.get('DFII10', 1.5), -2, 2) * -0.20
+        cms_pmi = np.clip(pmi_ivme / 2, -2, 2) * 0.25 # PMI farkını normalize et
+
+        cms = cms_ndl + cms_spr + cms_rr + cms_pmi
 
         return {
             'date': datetime.now().strftime('%Y-%m-%d'),
             'cms': round(float(cms), 4),
             'ndl': round(float(ndl), 0),
             'pmi_ivme': round(float(pmi_ivme), 2),
-            'real_rate': round(float(data.get('DFII10', 0)), 2), # YENİ SÜTUN
-            'spread': round(float(data.get('BAMLH0A0HYM2', 0)), 2) # YENİ SÜTUN
+            'real_rate': round(float(data.get('DFII10', 0)), 2)
         }
 
 if __name__ == "__main__":
