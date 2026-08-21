@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- AYARLAR ---
 FRED_API_KEY = os.getenv("FRED_API_KEY")
@@ -14,74 +14,72 @@ class MacroSentinel:
         self.api_key = api_key
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
 
-    def fetch_fred(self, s_id):
-        """FRED'den veri çeker, hata alırsa None döner."""
+    def fetch_fred(self, s_id, limit=12):
+        """FRED'den veri çeker."""
         try:
-            params = {'series_id': s_id, 'api_key': self.api_key, 'file_type': 'json', 'limit': 10}
+            params = {'series_id': s_id, 'api_key': self.api_key, 'file_type': 'json', 'sort_order': 'desc', 'limit': limit}
             r = requests.get(self.base_url, params=params, timeout=10).json()
             obs = pd.DataFrame(r['observations'])[['date', 'value']]
             obs['value'] = pd.to_numeric(obs['value'], errors='coerce')
-            return obs.set_index(pd.to_datetime(obs['date']))['value'].dropna()
+            return obs['value'].dropna()
         except: return None
 
-    def get_failover_data(self):
-        """FRED başarısız olursa Yahoo Finance üzerinden Proxy üretir."""
+    def get_failover_spread(self):
+        """FRED Spread hatası verirse Yahoo üzerinden HYG proxy üretir."""
         try:
-            # HY Spread Proxy: 100 - HYG ETF Fiyatı
-            hyg = yf.download("HYG", period="1mo", interval="1d")['Close'].ffill()
-            return 100 - hyg.iloc[-1]
-        except: return 5.0 # Çok acil durum sabiti
+            hyg = yf.download("HYG", period="5d", progress=False)['Close'].ffill()
+            return (100 - hyg.iloc[-1]) / 10 # Normalize edilmiş spread proxy
+        except: return 4.0
 
-    def run_engine(self):
-        # 1. VERİ TOPLAMA (Failover Destekli)
+    def run(self):
         data = {}
-        # Likidite Bileşenleri
-        for s in ['WALCL', 'WTREGEN', 'RRPONTSYD', 'DFII10', 'T10YIE', 'NAPM', 'BAMLH0A0HYM2']:
-            val = self.fetch_fred(s)
-            if val is not None: data[s] = val.iloc[0]
+        # 1. Veri Toplama
+        series = ['WALCL', 'WTREGEN', 'RRPONTSYD', 'DFII10', 'T10YIE', 'NAPM', 'BAMLH0A0HYM2']
+        for s in series:
+            vals = self.fetch_fred(s)
+            if vals is not None and not vals.empty:
+                if s == 'NAPM': # PMI Momentum: Mevcut - 3 Aylık Ortalama
+                    data[s] = vals.iloc[0]
+                    data['pmi_avg'] = vals.head(3).mean()
+                else:
+                    data[s] = vals.iloc[0]
             else:
-                # Proxy Mantığı
-                if s == 'BAMLH0A0HYM2': data[s] = self.get_failover_data()
-                elif s == 'NAPM': data[s] = 50.0 # Nötr büyüme
+                # Failover Mantığı
+                if s == 'BAMLH0A0HYM2': data[s] = self.get_failover_spread()
+                elif s == 'NAPM': data[s], data['pmi_avg'] = 50.0, 50.0
+                elif s == 'T10YIE': data[s] = 2.1
                 else: data[s] = 0.0
 
-        # 2. HESAPLAMALAR
-        # NDL: Net Dollar Liquidity
+        # 2. Hesaplamalar
         ndl = data.get('WALCL', 0) - data.get('WTREGEN', 0) - (data.get('RRPONTSYD', 0) * 1000)
+        pmi_ivme = data.get('NAPM', 50) - data.get('pmi_avg', 50)
         
-        # PMI Momentum: Mevcut PMI - 3 Aylık Ortalama (Trend yönü)
-        pmi_raw = data.get('NAPM', 50)
-        pmi_mom = pmi_raw - 50.0 # 50 eşiğine göre ivme
-
-        # 3. Z-SCORE VE CMS (Basitleştirilmiş üretim mantığı)
-        # Not: Gerçek Z-Score için tarihsel CSV okunur
-        if os.path.exists(HISTORY_FILE):
-            df_h = pd.read_csv(HISTORY_FILE)
-            # Burada 5 yıllık rolling hesaplanır (Hız için son değer üzerinden simüle edilmiştir)
-            z_ndl = (ndl - 7000000) / 500000 # Örnek baseline
-        else:
-            z_ndl = 0
-
-        # Skor Ağırlıkları
-        cms = (z_ndl * 0.25) + (data['BAMLH0A0HYM2'] * -0.20) + (data['DFII10'] * -0.15) + (pmi_mom * 0.15)
+        # Basitleştirilmiş CMS (Z-Skor simülasyonlu)
+        # NDL %25, Spread -%20, Real Rate -%15, PMI Ivme %15, Breakeven %25
+        z_ndl = (ndl - 7000000) / 450000
+        z_spr = (data.get('BAMLH0A0HYM2', 4) - 4.5) / 1.5
         
+        cms = (z_ndl * 0.25) + (z_spr * -0.20) + (data.get('DFII10', 1.5) * -0.15) + (pmi_ivme * 0.15) + (data.get('T10YIE', 2.1) * 0.25)
+
         return {
             'date': datetime.now().strftime('%Y-%m-%d'),
-            'cms': round(cms, 4),
-            'ndl': ndl,
-            'pmi_ivme': pmi_mom
+            'cms': round(float(cms), 4),
+            'ndl': round(float(ndl), 0),
+            'pmi_ivme': round(float(pmi_ivme), 2)
         }
 
 if __name__ == "__main__":
-    sentinel = MacroSentinel(FRED_API_KEY)
-    report = sentinel.run_engine()
-    
-    # Veriyi CSV'ye işle (GitHub Actions bunu commit eder)
-    new_row = pd.DataFrame([report])
-    if os.path.exists(HISTORY_FILE):
-        df = pd.read_csv(HISTORY_FILE)
-        df = pd.concat([df, new_row]).drop_duplicates(subset='date', keep='last')
-        df.to_csv(HISTORY_FILE, index=False)
+    if not FRED_API_KEY:
+        print("HATA: API Key eksik.")
     else:
-        new_row.to_csv(HISTORY_FILE, index=False)
-    print(f"CMS Raporu Hazır: {report['cms']}")
+        engine = MacroSentinel(FRED_API_KEY)
+        res = engine.run()
+        
+        df_new = pd.DataFrame([res])
+        if os.path.exists(HISTORY_FILE):
+            df_old = pd.read_csv(HISTORY_FILE)
+            df_final = pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last')
+            df_final.to_csv(HISTORY_FILE, index=False)
+        else:
+            df_new.to_csv(HISTORY_FILE, index=False)
+        print("İşlem Başarılı.")
