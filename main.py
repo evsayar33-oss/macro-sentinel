@@ -10,12 +10,16 @@ import pytz
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 HISTORY_FILE = "cms_history.csv"
 
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
 class UltimateSentinelEngine:
     def __init__(self, api_key):
         self.api_key = api_key
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
 
-    def fetch_fred(self, s_id, limit=252):
+    def fetch_fred(self, s_id, limit=300):
         try:
             params = {'series_id': s_id, 'api_key': self.api_key, 'file_type': 'json', 'sort_order': 'desc', 'limit': limit}
             r = requests.get(self.base_url, params=params, timeout=15).json()
@@ -26,59 +30,56 @@ class UltimateSentinelEngine:
 
     def run(self):
         # 1. VERİ TOPLAMA
-        fred_series = {
-            'fed': 'WALCL', 'ecb': 'ECBASSETSW', 'boj': 'JPNASSETS', 
-            'rrp': 'RRPONTSYD', 'tga': 'WTREGEN', 'spread': 'BAMLH0A0HYM2', 
-            'tips': 'DFII10', 'pmi': 'NAPM'
-        }
-        raw = {k: self.fetch_fred(s_id) for k, s_id in fred_series.items()}
-            
-        # Kurlar ve High-Frequency Veriler
-        y_data = yf.download(["HG=F", "GC=F", "^PCCCE", "ES=F", "EURUSD=X", "JPYUSD=X"], period="1y", progress=False)['Close'].ffill()
+        fred_ids = {'fed': 'WALCL', 'ecb': 'ECBASSETSW', 'boj': 'JPNASSETS', 'rrp': 'RRPONTSYD', 'tga': 'WTREGEN', 'spread': 'BAMLH0A0HYM2', 'tips': 'DFII10', 'pmi': 'NAPM'}
+        raw = {k: self.fetch_fred(v) for k, v in fred_ids.items()}
+        y_data = yf.download(["HG=F", "GC=F", "^PCCCE", "ES=F", "EURUSD=X", "JPYUSD=X"], period="2y", progress=False)['Close'].ffill()
         
-        # 2. KUR DÜZELTMELİ GLOBAL LİKİDİTE (G3)
-        try:
-            fed_usd = raw['fed'].iloc[0] # Milyon $
-            ecb_usd = raw['ecb'].iloc[0] * y_data['EURUSD=X'].iloc[-1] # Milyon Euro -> USD
-            boj_usd = (raw['boj'].iloc[0] * 1000) * y_data['JPYUSD=X'].iloc[-1] # Milyar Yen -> USD (Milyona çevrildi)
-            g3_liq = fed_usd + ecb_usd + boj_usd
-            
-            ndl = raw['fed'].iloc[0] - raw['tga'].iloc[0] - (raw['rrp'].iloc[0] * 1000)
-        except: g3_liq, ndl = 25000000, 7000000 # Failover
+        # 2. BİRİM VE KUR DÜZELTMELİ G3 LİKİDİTE (HATA GİDERİLDİ)
+        fed_m = raw['fed'].iloc[0] # Millions USD
+        ecb_m = raw['ecb'].iloc[0] * y_data['EURUSD=X'].iloc[-1] # Millions EUR -> USD
+        boj_m = (raw['boj'].iloc[0] / 100) * y_data['JPYUSD=X'].iloc[-1] # BoJ verisi 100M Yen birimindedir -> USD
+        g3_liq = fed_m + ecb_m + boj_m
+        ndl = raw['fed'].iloc[0] - raw['tga'].iloc[0] - (raw['rrp'].iloc[0] * 1000)
 
-        # 3. PMI MOMENTUM (nan korumalı)
-        pmi_vals = raw['pmi']
-        pmi_ivme = pmi_vals.iloc[0] - pmi_vals.head(6).mean() if len(pmi_vals) > 1 else 0.0
+        # 3. DİNAMİK IC (Information Coefficient) HESAPLAMA
+        # Piyasa şu an neye tepki veriyor? (Likidite, Büyüme, Stres, Faiz)
+        spx_ret = y_data['ES=F'].pct_change().shift(-1)
+        factors = pd.DataFrame({
+            'liq': raw['fed'].reindex(y_data.index, method='ffill'),
+            'growth': (y_data['HG=F'] / y_data['GC=F']),
+            'stress': raw['spread'].reindex(y_data.index, method='ffill'),
+            'rates': raw['tips'].reindex(y_data.index, method='ffill')
+        }).ffill()
+        corrs = factors.tail(60).corrwith(spx_ret.tail(60)).fillna(0).abs()
+        weights = softmax(corrs.values) # Dinamik Ağırlıklar
 
         # 4. SKOR ÜRETİMİ
-        # NDL Z-Score (6.8M baseline)
-        z_ndl = (ndl - 6800000) / 450000
+        def z(val, series): return (val - series.mean()) / (series.std() + 1e-6)
+        pmi_ivme = z(raw['pmi'].iloc[0], raw['pmi'])
+        copper_gold = y_data['HG=F'] / y_data['GC=F']
         
-        # Dinamik CMS (Ağırlıklar: NDL %30, Spread %25, Reel Rate %20, PMI %25)
-        cms = (np.clip(z_ndl, -2, 2) * 0.30 + 
-               np.clip((raw['spread'].iloc[0] - 4.5)/1.5, -2, 2) * -0.25 + 
-               np.clip(raw['tips'].iloc[0], -2, 2) * -0.20 + 
-               np.clip(pmi_ivme / 2, -2, 2) * 0.25)
+        cms = (z(ndl, raw['fed']) * weights[0] + 
+               z(copper_gold.iloc[-1], copper_gold) * weights[1] + 
+               z(raw['spread'].iloc[0], raw['spread']) * -weights[2] + 
+               z(raw['tips'].iloc[0], raw['tips']) * -weights[3])
 
         return {
             'date': datetime.now(pytz.timezone('Europe/Istanbul')).strftime('%Y-%m-%d'),
             'cms': round(float(cms), 4),
             'ndl': round(float(ndl), 0),
             'g3_liq': round(float(g3_liq), 0),
-            'copper_gold': round(float(y_data['HG=F'].iloc[-1] / y_data['GC=F'].iloc[-1]), 4),
+            'copper_gold': round(float(copper_gold.iloc[-1]), 4),
             'pc_ratio': round(float(y_data['^PCCCE'].iloc[-1]), 2),
             'real_rate': round(float(raw['tips'].iloc[0]), 2),
-            'pmi_ivme': round(float(pmi_ivme), 2)
+            'pmi_z': round(float(pmi_ivme), 2),
+            'w_str': ",".join([f"{w:.2f}" for w in weights])
         }
 
 if __name__ == "__main__":
     if FRED_API_KEY:
-        engine = UltimateSentinelEngine(FRED_API_KEY)
-        res = engine.run()
+        res = UltimateSentinelEngine(FRED_API_KEY).run()
         df_new = pd.DataFrame([res])
         if os.path.exists(HISTORY_FILE):
             df_old = pd.read_csv(HISTORY_FILE)
-            df_final = pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last')
-            df_final.to_csv(HISTORY_FILE, index=False)
-        else:
-            df_new.to_csv(HISTORY_FILE, index=False)
+            pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last').to_csv(HISTORY_FILE, index=False)
+        else: df_new.to_csv(HISTORY_FILE, index=False)
