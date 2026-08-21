@@ -2,70 +2,99 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import yfinance as yf
+from datetime import datetime, timedelta
+from scipy.special import softmax
 
 # --- AYARLAR ---
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 HISTORY_FILE = "cms_history.csv"
 
-class MacroSentinel:
+class UltimateSentinelEngine:
     def __init__(self, api_key):
         self.api_key = api_key
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
 
-    def fetch_fred(self, s_id, limit=126): # Daha fazla veri çekerek Z-Skoru dengeleyelim
+    def fetch_fred(self, s_id, limit=252):
         try:
             params = {'series_id': s_id, 'api_key': self.api_key, 'file_type': 'json', 'sort_order': 'desc', 'limit': limit}
             r = requests.get(self.base_url, params=params, timeout=10).json()
             obs = pd.DataFrame(r['observations'])[['date', 'value']]
             obs['value'] = pd.to_numeric(obs['value'], errors='coerce')
-            return obs['value'].dropna()
+            return obs.set_index(pd.to_datetime(obs['date']))['value'].dropna()
         except: return None
 
     def run(self):
-        series = ['WALCL', 'WTREGEN', 'RRPONTSYD', 'DFII10', 'T10YIE', 'NAPM', 'BAMLH0A0HYM2']
-        data = {}
-        raw_series = {}
-        for s in series:
-            vals = self.fetch_fred(s)
-            if vals is not None and not vals.empty:
-                raw_series[s] = vals
-                data[s] = vals.iloc[0]
-            else:
-                data[s] = 0.0
-
-        # 1. NDL Hesapla (Net Dollar Liquidity)
-        ndl = data.get('WALCL', 0) - data.get('WTREGEN', 0) - (data.get('RRPONTSYD', 0) * 1000)
+        # 1. VERİ TOPLAMA
+        # L2: Global Likidite (Fed + ECB + BoJ)
+        # L3: High-Frequency (Bakır/Altın)
+        # L5: Sentiment (Put/Call)
         
-        # 2. Dinamik Z-Score (Sabit rakam yerine son 100 verinin ortalaması)
-        # NDL Z-Score
-        z_ndl = (ndl - 7200000) / 400000 # Mevcut rejim baseline
+        # FRED Verileri
+        fred_series = {
+            'fed': 'WALCL', 'ecb': 'ECBASSETSW', 'boj': 'JPNASSETS', 
+            'rrp': 'RRPONTSYD', 'tga': 'WTREGEN', 'spread': 'BAMLH0A0HYM2', 
+            'tips': 'DFII10', 'pmi': 'NAPM'
+        }
         
-        # 3. PMI Momentum (Hata düzeltildi)
-        pmi_raw = data.get('NAPM', 50)
-        pmi_avg = raw_series['NAPM'].head(6).mean() if 'NAPM' in raw_series else 50
-        pmi_ivme = pmi_raw - pmi_avg # Sadece son trende bak
+        raw = {}
+        for key, s_id in fred_series.items():
+            raw[key] = self.fetch_fred(s_id)
+            
+        # Yahoo Verileri (Bakır, Altın, Put/Call, SPX)
+        y_data = yf.download(["HG=F", "GC=F", "^PCCCE", "ES=F", "DX-Y.NYB"], period="1y", interval="1d", progress=False)['Close'].ffill()
+        
+        # 2. KOMPOZİT FAKTÖRLERİ OLUŞTURMA
+        # F1: Global Likidite Index (NDL + G3 Bilanço)
+        g3_liq = (raw['fed'] + raw['ecb'] + raw['boj']).ffill().iloc[0]
+        ndl = raw['fed'].iloc[0] - raw['tga'].iloc[0] - (raw['rrp'].iloc[0] * 1000)
+        
+        # F2: Growth Proxy (Bakır / Altın Rasyosu - High Frequency)
+        copper_gold = y_data['HG=F'] / y_data['GC=F']
+        
+        # F3: Sentiment (Put/Call Rasyosu)
+        pc_ratio = y_data['^PCCCE']
 
-        # 4. CMS Skoru (Ağırlıklar: NDL %30, Spread -%25, RealRate -%20, PMI %25)
-        # Her bileşeni -2 ile +2 arasına hapsettim (Clipping)
-        cms_ndl = np.clip(z_ndl, -2, 2) * 0.30
-        cms_spr = np.clip((data.get('BAMLH0A0HYM2', 4.5) - 4.5) / 1.5, -2, 2) * -0.25
-        cms_rr  = np.clip(data.get('DFII10', 1.5), -2, 2) * -0.20
-        cms_pmi = np.clip(pmi_ivme / 2, -2, 2) * 0.25 # PMI farkını normalize et
-
-        cms = cms_ndl + cms_spr + cms_rr + cms_pmi
+        # 3. DİNAMİK IC AĞIRLIKLANDIRMA (The Core Intelligence)
+        # Faktörlerin SP500 getirisiyle son 60 günlük korelasyonunu (IC) ölçeriz
+        spx_ret = y_data['ES=F'].pct_change().shift(-1) # Forward return
+        
+        # Test edilecek faktör serileri
+        factor_matrix = pd.DataFrame({
+            'liq': raw['fed'].reindex(y_data.index, method='ffill'),
+            'growth': copper_gold,
+            'stress': raw['spread'].reindex(y_data.index, method='ffill'),
+            'rates': raw['tips'].reindex(y_data.index, method='ffill')
+        }).ffill()
+        
+        corrs = factor_matrix.tail(60).corrwith(spx_ret.tail(60))
+        # Softmax ile ağırlıkları normalize et (Korelasyonu en yüksek olana daha çok ağırlık)
+        weights = softmax(corrs.abs().values)
+        
+        # 4. SKOR ÜRETİMİ (Z-Score Bazlı)
+        def z(val, series): return (val - series.mean()) / (series.std() + 1e-6)
+        
+        cms = (
+            z(ndl, raw['fed']) * weights[0] +
+            z(copper_gold.iloc[-1], copper_gold) * weights[1] +
+            z(raw['spread'].iloc[-1], raw['spread']) * -weights[2] + # Spread ters çalışır
+            z(raw['tips'].iloc[-1], raw['tips']) * -weights[3]       # Faiz ters çalışır
+        )
 
         return {
-            'date': datetime.now().strftime('%Y-%m-%d'),
+            'date': datetime.now(pytz.timezone('Europe/Istanbul')).strftime('%Y-%m-%d'),
             'cms': round(float(cms), 4),
             'ndl': round(float(ndl), 0),
-            'pmi_ivme': round(float(pmi_ivme), 2),
-            'real_rate': round(float(data.get('DFII10', 0)), 2)
+            'g3_liq': round(float(g3_liq), 0),
+            'copper_gold': round(float(copper_gold.iloc[-1]), 4),
+            'pc_ratio': round(float(pc_ratio.iloc[-1]), 2),
+            'weights': ",".join([f"{w:.2f}" for w in weights])
         }
 
+import pytz
 if __name__ == "__main__":
     if FRED_API_KEY:
-        engine = MacroSentinel(FRED_API_KEY)
+        engine = UltimateSentinelEngine(FRED_API_KEY)
         res = engine.run()
         df_new = pd.DataFrame([res])
         if os.path.exists(HISTORY_FILE):
