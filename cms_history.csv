@@ -1,2 +1,2 @@
-date,cms,ndl,pmi_ivme,real_rate,spread
-2026-08-21,-13.4344,5791862.0,-50.0,2.35,2.75
+date,cms,ndl,pmi_ivme,real_rate,spread,g3_liq,copper_gold,pc_ratio,weights
+2026-08-21,,5791862.0,,,,,,,"nan,nan,nan,nan"
