@@ -1,2 +1,2 @@
-date,cms,ndl,pmi_ivme,real_rate,spread,g3_liq,copper_gold,pc_ratio,weights,vix,pmi_z,w_str
-2026-08-21,-0.78,5791862.0,,2.35,,13671337.0,0.0014,,,15.3,0.0,"0.23,0.26,0.28,0.24"
+date,cms,ndl,pmi_ivme,real_rate,spread,g3_liq,copper_gold,pc_ratio,weights,vix,pmi_z,w_str,pmi_growth
+2026-08-21,-0.8776,5791862.0,,2.35,,54186515.0,0.0014,,,15.29,,"0.25,0.25,0.25,0.25",0.0
