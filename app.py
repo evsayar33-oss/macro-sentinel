@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 
-st.set_page_config(page_title="Ultimate Macro Sentinel", layout="wide")
+st.set_page_config(page_title="Institutional Macro Sentinel", layout="wide")
 st.markdown("<style>.main { background-color: #05070a; color: white; }</style>", unsafe_allow_html=True)
 
 if os.path.exists("cms_history.csv"):
@@ -10,48 +10,66 @@ if os.path.exists("cms_history.csv"):
     latest = df.iloc[-1]
     val, rr = latest['cms'], latest['real_rate']
     
-    if val > 0.4: reg, col = "LİKİDİTE BOĞASI (QE)", "#00ff00"
-    elif 0.0 < val <= 0.4: reg, col = "ERKEN GEÇİŞ / NÖTR", "#76ff03"
-    elif -0.4 <= val <= 0.0: reg, col = "SIKIŞMA / SAVUNMA", "#ffcc00"
-    else: reg, col = "KRİZ / RESESYON", "#ff4b4b"
+    # REJİM BELİRLEME
+    if val > 0.4: reg, col, status = "PİYASAYA PARA POMPALANIYOR (QE)", "#00ff00", "BÜYÜME"
+    elif 0.0 < val <= 0.4: reg, col, status = "UZUN VADELİ KORUYUCU", "#76ff03", "STABİLİTE"
+    elif -0.4 <= val <= 0.0: reg, col, status = "SIKIŞMA / SAVUNMA", "#ffcc00", "SAVUNMA"
+    else: reg, col, status = "KRİZ / RESESYON", "#ff4b4b", "KORUMA"
 
     st.title("🛡️ ULTIMATE MACRO SENTINEL (PRO)")
     st.markdown(f'<div style="padding:20px; border-radius:15px; border:3px solid {col}; background:{col}05; text-align:center;">'
                 f'<h1 style="color:{col}; margin:0;">{reg}</h1>'
                 f'<h2 style="margin:5px 0;">CMS PRO SKORU: {val:.2f}</h2>'
-                f'<p style="font-size:14px; opacity:0.7;">Anlık Faktör Ağırlıkları (L/G/S/R): {latest["w_str"]}</p></div>', unsafe_allow_html=True)
+                f'<p style="font-size:16px; opacity:0.8;">Piyasa Modu: <b>{status}</b> | Faktör Ağırlıkları (L/G/S/R): {latest["w_str"]}</p></div>', unsafe_allow_html=True)
 
-    st.subheader("🎯 Stratejik Varlık Analizi & Notlar")
+    # --- STRATEJİK VARLIK ANALİZ MATRİSİ ---
+    st.subheader("🎯 Mevcut Verilere Göre Stratejik Varlık Analizi")
     v1, v2, v3 = st.columns(3)
     
     with v1:
-        st.markdown(f"### 🚀 Büyüme (Hücum)\n* **Hisseler:** {'✅ Uygun' if val > 0.4 else '⚪ Bekle'}\n* **Kripto:** {'🚀 Agresif Al' if val > 0.4 else '⚪ İzle'}\n* **Bakır/Gümüş:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
+        st.markdown(f"### 🚀 Büyüme (Para Pompalanırken)\n"
+                    f"*   **Hisseler:** {'🔥 Tam Kapasite' if val > 0.4 else '⚪ İzle'}\n"
+                    f"*   **Kripto Paralar:** {'🚀 Agresif' if val > 0.4 else '⚪ Bekle'}\n"
+                    f"*   **Değerli Metaller (Altın, Gümüş, Bakır):** {'✅ Uygun' if val > 0.2 else '⚪ Nötr'}")
+    
     with v2:
-        st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'✅ Uygun' if rr > 1.5 else '⚪ İzle'}\n* **Yabancı Endeksler:** {'✅ Pozitif' if val > 0 else '⚠️ Defansif'}")
+        st.markdown(f"### 🛡️ Uzun Vadeli Koruyucu (Düşük Risk)\n"
+                    f"*   **Gayrimenkul:** {'✅ Stabil' if val > -0.3 else '⚠️ Bekle'}\n"
+                    f"*   **Altın (Stratejik):** {'✅ Topla' if rr < 1.0 else '⚪ Nötr'}\n"
+                    f"*   **Eurobond:** {'🔥 Uygun' if rr > 1.8 else '✅ Pozitif'}\n"
+                    f"*   **Sabit/Değişken Tahviller:** {'✅ Tut' if rr > 0 else '⚠️ Azalt'}\n"
+                    f"*   **Yabancı Borsa Endeksleri:** {'✅ Pozitif' if val > 0 else '⚠️ Defansif'}")
+
     with v3:
-        f_notu = "Yüksek Kazanç" if rr > 1.8 else "Düşük Kazanç"
-        a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
-        st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar:** (Seçici Ol)\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
+        # FAİZ VE ALTIN İÇİN OTOMATİK NOTLAR
+        f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif" if rr > 0.5 else "Kazanç Düşük"
+        a_notu = "Önerilmez (Faiz Baskısı)" if rr > 1.0 else "Reel Faiz Yok / Güçlü"
+        st.markdown(f"### 🚨 Kriz Zamanı (Resesyon)\n"
+                    f"*   **Döviz Faiz:** ({f_notu})\n"
+                    f"*   **Emtialar:** (Arz Kısıtlı, Seçici Ol)\n"
+                    f"*   **Serbest Fonlar (ETF):** (Pozitif Para Akışı)\n"
+                    f"*   **Altın:** ({a_notu})")
 
     st.divider()
+
+    # --- KURUMSAL KATMANLAR ---
     c1, c2, c3 = st.columns(3)
     with c1:
         st.write("#### 🌐 Global Likidite (L2)")
-        st.write(f"G3 Bilanço: **{latest['g3_liq']/1e6:.2f}T$**")
+        st.write(f"G3 Bilanço Toplamı: **{latest['g3_liq']/1e6:.2f}T$**")
         st.write(f"Net Dolar Likiditesi: **{latest['ndl']/1e6:.2f}T$**")
         st.progress(min(max((val + 1) / 2, 0.0), 1.0))
     with c2:
         st.write("#### ⚡ High-Freq & Growth (L3)")
         st.write(f"Bakır/Altın Rasyosu: **{latest['copper_gold']:.4f}**")
-        st.write(f"PMI Büyüme: **{latest['pmi_z']}σ**")
+        st.write(f"PMI Büyüme İvmesi: **{latest['pmi_growth']}**")
+        st.caption("PMI > 0 ise büyüme hızlanıyor demektir.")
     with c3:
         st.write("#### 🧠 Sentiment (L5)")
         st.write(f"Piyasa Korkusu (VIX): **{latest['vix']}**")
-        if latest['vix'] > 25: st.error("Yüksek Korku")
-        elif latest['vix'] < 15: st.success("Düşük Risk Algısı")
-        else: st.info("Dengeli Sentiment")
+        st.write(f"10Y Reel Faiz: **%{rr}**")
 
     st.subheader("📈 CMS Döngü Takibi")
-    st.line_chart(df.set_index('date')['cms'].tail(30))
+    st.line_chart(df.set_index('date')['cms'].tail(60))
 else:
     st.info("Veri yükleniyor...")
