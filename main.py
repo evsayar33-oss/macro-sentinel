@@ -34,34 +34,47 @@ class UltimateSentinelEngine:
         fred_ids = {
             'fed': 'WALCL', 'ecb': 'ECBASSETSW', 'boj': 'JPNASSETS', 
             'rrp': 'RRPONTSYD', 'tga': 'WTREGEN', 'spread': 'BAMLH0A0HYM2', 
-            'tips': 'DFII10', 'pmi': 'NAPM', 'vix': 'VIXCLS'
+            'tips': 'DFII10', 'pmi': 'NAPM', 'vix': 'VIXCLS',
+            'yc': 'T10Y2Y'
         }
         raw = {k: self.fetch_fred(v) for k, v in fred_ids.items()}
-        y_data = yf.download(["HG=F", "GC=F", "ES=F", "EURUSD=X", "JPYUSD=X"], period="2y", progress=False)['Close'].ffill()
+        # YENİ: VIX (1 Ay) ve VIX3M (3 Ay) opsiyon eğrisi verileri eklendi.
+        y_data = yf.download(["HG=F", "GC=F", "ES=F", "EURUSD=X", "JPYUSD=X", "^VIX", "^VIX3M"], period="2y", progress=False)['Close'].ffill()
         
         # 2. G3 LİKİDİTE KALİBRASYONU
         try:
             cur_eur = y_data['EURUSD=X'].iloc[-1]
             cur_jpy = y_data['JPYUSD=X'].iloc[-1]
-            fed_m = raw['fed'].iloc[0] # Millions
-            ecb_m = raw['ecb'].iloc[0] * cur_eur # Millions
-            boj_m = (raw['boj'].iloc[0] * 100) * cur_jpy # BoJ 100M Yen -> Millions USD
+            fed_m = raw['fed'].iloc[0] 
+            ecb_m = raw['ecb'].iloc[0] * cur_eur 
+            boj_m = (raw['boj'].iloc[0] * 100) * cur_jpy 
             g3_liq = fed_m + ecb_m + boj_m
             ndl = fed_m - raw['tga'].iloc[0] - (raw['rrp'].iloc[0] * 1000)
         except: g3_liq, ndl = 21000000, 6800000
 
-        # 3. DİNAMİK IC MOTORU
-        spx_ret = y_data['ES=F'].pct_change().shift(-1)
-        factors = pd.DataFrame({
-            'liq': raw['fed'].reindex(y_data.index, method='ffill'),
-            'growth': (y_data['HG=F'] / y_data['GC=F']),
-            'stress': raw['spread'].reindex(y_data.index, method='ffill'),
-            'rates': raw['tips'].reindex(y_data.index, method='ffill')
-        }).ffill().fillna(0)
-        corrs = factors.tail(90).corrwith(spx_ret.tail(90)).abs().fillna(0)
-        weights = softmax(corrs.values) if corrs.sum() > 0.01 else np.array([0.25, 0.25, 0.25, 0.25])
+        # GEÇMİŞ NDL SERİSİ ÜRETİMİ
+        fed_s = raw['fed'].reindex(y_data.index, method='ffill')
+        tga_s = raw['tga'].reindex(y_data.index, method='ffill').fillna(0)
+        rrp_s = raw['rrp'].reindex(y_data.index, method='ffill').fillna(0)
+        ndl_s = fed_s - tga_s - (rrp_s * 1000)
 
-        # 4. SKOR ÜRETİMİ
+        # 3. YÜKSELTİLMİŞ DİNAMİK IC MOTORU & NOWCASTING (EMA)
+        spx_ret = y_data['ES=F'].pct_change().shift(-1)
+        
+        # YENİ: Aylık verilerin merdiven etkisini kırmak için ewm (Exponential Moving Average) ile Nowcasting yapıyoruz.
+        factors = pd.DataFrame({
+            'liq_now': ndl_s,                                       
+            'liq_fwd': ndl_s.pct_change(60),                        
+            'growth_now': (y_data['HG=F'] / y_data['GC=F']),        
+            'cycle_fwd': raw['yc'].reindex(y_data.index, method='ffill'), 
+            'stress_now': raw['spread'].reindex(y_data.index, method='ffill'), 
+            'rates_fwd': raw['tips'].reindex(y_data.index, method='ffill').diff(60) 
+        }).ffill().fillna(0).ewm(span=10).mean() # NOWCASTING EMA FİLTRESİ EKLENDİ
+        
+        corrs = factors.tail(90).corrwith(spx_ret.tail(90)).abs().fillna(0)
+        weights = softmax(corrs.values) if corrs.sum() > 0.01 else np.array([0.16]*6)
+
+        # 4. BİRLEŞTİRİLMİŞ (UNIFIED) SKOR ÜRETİMİ
         def z(val, series):
             if series.empty or series.std() == 0: return 0.0
             return (val - series.mean()) / (series.std() + 1e-6)
@@ -69,10 +82,25 @@ class UltimateSentinelEngine:
         pmi_z = z(raw['pmi'].iloc[0], raw['pmi']) if not raw['pmi'].empty else 0.0
         vix_val = raw['vix'].iloc[0] if not raw['vix'].empty else 15.0
         
-        cms = (z(ndl, raw['fed']) * weights[0] + 
-               z(y_data['HG=F'].iloc[-1]/y_data['GC=F'].iloc[-1], (y_data['HG=F']/y_data['GC=F'])) * weights[1] + 
-               z(raw['spread'].iloc[0], raw['spread']) * -weights[2] + 
-               z(raw['tips'].iloc[0], raw['tips']) * -weights[3])
+        cms = (z(ndl, factors['liq_now']) * weights[0] + 
+               z(factors['liq_fwd'].iloc[-1], factors['liq_fwd']) * weights[1] + 
+               z(y_data['HG=F'].iloc[-1]/y_data['GC=F'].iloc[-1], factors['growth_now']) * weights[2] + 
+               z(raw['yc'].iloc[0] if not raw['yc'].empty else 0.0, factors['cycle_fwd']) * weights[3] - 
+               z(raw['spread'].iloc[0], factors['stress_now']) * weights[4] - 
+               z(factors['rates_fwd'].iloc[-1], factors['rates_fwd']) * weights[5])
+               
+        # 5. YENİ: VIX TERM STRUCTURE (KUYRUK RİSKİ)
+        try:
+            vix_term = y_data['^VIX'].iloc[-1] / y_data['^VIX3M'].iloc[-1]
+        except: vix_term = 0.85 # Hata olursa normal contango say
+
+        # 6. YENİ: DİNAMİK PORTFÖY BOYUTLANDIRMA (RISK PARITY)
+        # Volatilite ve CMS'e göre hedef ağırlıklar hesaplanıyor
+        eq_raw = 50 + (float(cms) * 25) - ((float(vix_val) - 15) * 1.5)
+        eq_weight = int(np.clip(eq_raw, 0, 100))
+        bnd_raw = 30 - (float(cms) * 10) + (float(raw['tips'].iloc[0] if not raw['tips'].empty else 1.0) * 5)
+        bond_weight = int(np.clip(bnd_raw, 0, 100 - eq_weight))
+        cash_weight = 100 - eq_weight - bond_weight
 
         return {
             'date': datetime.now(pytz.timezone('Europe/Istanbul')).strftime('%Y-%m-%d'),
@@ -83,12 +111,16 @@ class UltimateSentinelEngine:
             'vix': round(float(vix_val), 2),
             'real_rate': round(float(raw['tips'].iloc[0]), 2),
             'pmi_z': round(float(pmi_z), 2),
-            'w_str': ",".join([f"{w:.2f}" for w in weights])
+            'yield_curve': round(float(raw['yc'].iloc[0] if not raw['yc'].empty else 0.0), 2),
+            'w_str': ",".join([f"{w:.2f}" for w in weights]),
+            'vix_term': round(float(vix_term), 3),
+            'eq_weight': eq_weight,
+            'bond_weight': bond_weight,
+            'cash_weight': cash_weight
         }
 
 if __name__ == "__main__":
     if FRED_API_KEY:
-        # İSİMLENDİRME DÜZELTİLDİ: UltimateSentinelEngine
         engine = UltimateSentinelEngine(FRED_API_KEY)
         res = engine.run()
         df_new = pd.DataFrame([res])
@@ -97,4 +129,4 @@ if __name__ == "__main__":
             pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last').to_csv(HISTORY_FILE, index=False)
         else:
             df_new.to_csv(HISTORY_FILE, index=False)
-        print("Success: CMS Updated.")
+        print("Success: Ultimate Pro Quant CMS Updated.")
