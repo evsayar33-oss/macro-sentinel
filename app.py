@@ -11,8 +11,8 @@ if os.path.exists("cms_history.csv"):
         latest = df.iloc[-1]
         val, rr = latest['cms'], latest['real_rate']
         
-        # YENİ VERİLERİ GÜVENLİ OKUMA (Geçmişte yoksa varsayılan ata)
         vix_term = latest.get('vix_term', 0.85)
+        ml_conf = latest.get('ml_confidence', 100)
         eq_w = latest.get('eq_weight', 50)
         bnd_w = latest.get('bond_weight', 30)
         csh_w = latest.get('cash_weight', 20)
@@ -28,7 +28,7 @@ if os.path.exists("cms_history.csv"):
             <div style="padding:20px; border-radius:15px; border:3px solid {col}; background:{col}05; text-align:center;">
                 <h1 style="color:{col}; margin:0;">{reg}</h1>
                 <h2 style="margin:5px 0;">CMS PRO SKORU: {val:.2f}</h2>
-                <p style="font-size:14px; opacity:0.8;">Piyasa Modu: <b>{status}</b> | Motor Ağırlıkları (6 Faktör): {latest.get('w_str', 'Hesaplanıyor...')}</p>
+                <p style="font-size:14px; opacity:0.8;">Piyasa Modu: <b>{status}</b> | Motor Ağırlıkları: {latest.get('w_str', 'Hesaplanıyor...')}</p>
             </div>
         """, unsafe_allow_html=True)
 
@@ -44,10 +44,19 @@ if os.path.exists("cms_history.csv"):
             a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
             st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar:** (Seçici Ol)\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
 
-        # YENİ: DİNAMİK PORTFÖY BOYUTLANDIRMA BÖLÜMÜ
+        # YENİ: ML DENETÇİSİ VE RİSK PARİTESİ
         st.divider()
-        st.subheader("⚖️ Dinamik Risk Paritesi (Konum Boyutlandırma)")
-        st.caption("Sistemin hesapladığı volatilite (VIX) ve makro-skor tabanlı optimum portföy dağılımı.")
+        st.subheader("⚖️ Dinamik Risk Paritesi & ML Denetçi")
+        
+        # ML Denetçi Durum Bildirimi
+        if ml_conf >= 75:
+            auditor_msg = f"🟢 **ML Denetçi Skoru: %{ml_conf}** (Ana modelin geçmiş tahminleri kârlı, portföy onaylandı.)"
+        elif 40 <= ml_conf < 75:
+            auditor_msg = f"🟡 **ML Denetçi Skoru: %{ml_conf}** (Piyasada karmaşa var, riskli varlıklar hafif kısıldı.)"
+        else:
+            auditor_msg = f"🔴 **ML Denetçi Skoru: %{ml_conf}** (ACİL FREN: Ana modelin Sharpe'ı düştü, hisse ağırlığı zorla düşürüldü!)"
+            
+        st.caption(auditor_msg)
         
         p1, p2, p3 = st.columns(3)
         with p1:
@@ -81,10 +90,9 @@ if os.path.exists("cms_history.csv"):
         with c3:
             st.write("#### 🧠 Sentiment & Gizli Risk (L3)")
             st.write(f"Piyasa Korkusu (VIX): **{latest['vix']}**")
-            # YENİ VIX TERM STRUCTURE ANALİZİ
             vix_durum = "Normal (Contango)" if vix_term < 1.0 else "🚨 PANİK (Backwardation)"
             st.write(f"VIX Eğrisi: **{vix_term:.2f}** ({vix_durum})")
-            st.write(f"Veri Modeli: **EMA Nowcasting (Aktif)**")
+            st.write(f"Veri Modeli: **EMA + ML Auditor**")
 
         st.subheader("📈 CMS Döngü Takibi (Birleştirilmiş İvme)")
         st.line_chart(df.set_index('date')['cms'].tail(30))
