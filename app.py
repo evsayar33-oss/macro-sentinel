@@ -16,9 +16,8 @@ if os.path.exists("cms_history.csv"):
         eq_w = latest.get('eq_weight', 50)
         bnd_w = latest.get('bond_weight', 30)
         csh_w = latest.get('cash_weight', 20)
-        
-        # Turnuvayı Hangi Büyüme Göstergesinin Kazandığını Oku
         act_growth = latest.get('active_growth_name', 'Bakir/Altin')
+        oil_trend = latest.get('oil_trend', 0.0)
         
         # REJİM BELİRLEME
         if val > 0.4: reg, col, status = "LİKİDİTE BOĞASI (QE)", "#00ff00", "HÜCUM"
@@ -35,6 +34,11 @@ if os.path.exists("cms_history.csv"):
             </div>
         """, unsafe_allow_html=True)
 
+        a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
+        if oil_trend > 0.05: emtia_notu = "🔥 Enerji/Petrol Al"
+        elif oil_trend < -0.05: emtia_notu = "⚠️ Zayıf (Uzak Dur)"
+        else: emtia_notu = "⚖️ Nötr (Seçici Ol)"
+
         st.subheader("🎯 Stratejik Varlık Analizi")
         v1, v2, v3 = st.columns(3)
         
@@ -44,11 +48,30 @@ if os.path.exists("cms_history.csv"):
             st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'🔥 Al' if rr > 1.8 else '✅ Pozitif'}\n* **Tahviller:** {'✅ Ekle' if rr > 1.0 else '⚠️ Azalt'}\n* **Yabancı Endeksler:** {'✅ Pozitif' if val > 0 else '⚠️ Defansif'}")
         with v3:
             f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif"
-            a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
-            st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar:** (Seçici Ol)\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
+            st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar (Enerji):** {emtia_notu}\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
+
+        # ==========================================
+        # YENİ: DİNAMİK RİSK PARİTESİ ETİKETLEME ZEKASI
+        # ==========================================
+        
+        # 1. Riskli Varlıklar Etiketi (Hisse/Emtia Seçimi)
+        if val > 0.4: risk_label = "Teknoloji, Kripto, Gümüş/Bakır"
+        elif val > 0.2: risk_label = "Geniş Hisseler, Endüstriyel Emtia"
+        elif val > 0.0: risk_label = "Yabancı Endeksler, Seçici Hisseler"
+        else: risk_label = "Sadece Defansif Hisseler (İzlemede)"
+
+        # 2. Sabit Getiri Etiketi (Tahvil/Gayrimenkul Seçimi)
+        if rr > 1.8 and val > -0.2: bond_label = "Eurobond, Tahvil, Gayrimenkul"
+        elif rr > 1.0: bond_label = "Tahvil, Eurobond"
+        else: bond_label = "Kısa Vadeli Tahvil / Para Piyasası"
+
+        # 3. Koruma Etiketi (Altın/Petrol/Nakit Seçimi)
+        if rr <= 0.8: safe_label = "Nakit, Fiziki Altın (Güçlü Koruma)"
+        elif oil_trend > 0.05: safe_label = "Nakit, Repo, Enerji (Hedge)"
+        else: safe_label = "Sadece Nakit / USD / Repo"
 
         st.divider()
-        st.subheader("⚖️ Dinamik Risk Paritesi & ML Denetçi")
+        st.subheader("⚖️ Dinamik Risk Paritesi (Makro-Sensörlü)")
         
         if ml_conf >= 75:
             auditor_msg = f"🟢 **ML Denetçi Skoru: %{ml_conf}** (Ana model onaylandı, portföy optimum.)"
@@ -61,13 +84,13 @@ if os.path.exists("cms_history.csv"):
         
         p1, p2, p3 = st.columns(3)
         with p1:
-            st.markdown(f"**📈 Riskli Varlıklar (Hisse/Kripto): %{eq_w}**")
+            st.markdown(f"**📈 Risk Bütçesi ({risk_label}): %{eq_w}**")
             st.progress(eq_w / 100.0)
         with p2:
-            st.markdown(f"**🛡️ Sabit Getiri (Tahvil/Eurobond): %{bnd_w}**")
+            st.markdown(f"**🛡️ Sabit Getiri ({bond_label}): %{bnd_w}**")
             st.progress(bnd_w / 100.0)
         with p3:
-            st.markdown(f"**💵 Koruma (Nakit/Altın): %{csh_w}**")
+            st.markdown(f"**💵 Koruma Bütçesi ({safe_label}): %{csh_w}**")
             st.progress(csh_w / 100.0)
 
         st.divider()
@@ -82,7 +105,6 @@ if os.path.exists("cms_history.csv"):
             
         with c2:
             st.write("#### ⚡ Büyüme & Risk (L2)")
-            # Seçilen aktif gösterge arayüzde gösteriliyor!
             st.write(f"Sistemin Seçtiği Büyüme Endeksi: **{act_growth}**")
             st.write(f"PMI Büyüme Skoru: **{latest['pmi_z']}σ**")
             yc_status = "Genişleme" if latest.get('yield_curve', 0) > 0 else "Daralma/Resesyon"
@@ -91,10 +113,10 @@ if os.path.exists("cms_history.csv"):
         with c3:
             st.write("#### 🧠 Sentiment & Gizli Risk (L3)")
             st.write(f"Piyasa Korkusu (VIX): **{latest['vix']}**")
+            st.write(f"10Y Reel Faiz: **%{rr}**")
             vix_durum = "Normal (Contango)" if vix_term < 1.0 else "🚨 PANİK (Backwardation)"
             st.write(f"VIX Eğrisi: **{vix_term:.2f}** ({vix_durum})")
-            st.write(f"Durum: **Darwinist Turnuva (Aktif)**")
-
+            
         st.subheader("📈 CMS Döngü Takibi (Birleştirilmiş İvme)")
         st.line_chart(df.set_index('date')['cms'].tail(30))
 else:
