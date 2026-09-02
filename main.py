@@ -80,18 +80,11 @@ class UltimateSentinelEngine:
                     active_growth_name = name
                     active_growth_series = series
 
-        # YENİ KURUMSAL: MAKRO TEYİTLİ PETROL RADARI (MA Çöpe Atıldı)
+        # PETROL RADARI (Makro Teyitli)
         try:
-            # 1. Price Action: 20 Günlük Kısa Vadeli Akıllı Para Z-Skoru
             oil_series = y_data['CL=F'].tail(30)
             oil_z = (oil_series.iloc[-1] - oil_series.mean()) / (oil_series.std() + 1e-6)
-            
-            # 2. Makro Talep Teyidi: Eğer aktif büyüme endeksimiz (örn: Bakır) düşüyorsa sahte yükseliştir!
-            # Son 1 aylık makro büyüme yönü (Pozitifse 1, Negatifse -1)
             macro_conf = 1 if active_growth_series.diff(20).iloc[-1] > 0 else -1
-            
-            # 3. Birleştirilmiş Öncü Sinyal (Z-Skor * Makro Teyit)
-            # Eğer petrol fırlar ama bakır düşerse (oil_z +1.5, macro_conf -1), sonuç negatife döner ve Sinyal Geri Çekilir!
             oil_trend = float(oil_z * macro_conf)
         except:
             oil_trend = 0.0
@@ -128,14 +121,22 @@ class UltimateSentinelEngine:
             vix_term = y_data['^VIX'].iloc[-1] / y_data['^VIX3M'].iloc[-1]
         except: vix_term = 0.85 
 
-        # 6. ML AUDITOR (GÖLGE DENETÇİ)
+        # 6. YENİ: ENSEMBLE (ÇOKLU-VADE) ML AUDITOR
         hist_cms = (z_series(factors['liq_now']) * weights[0] + z_series(factors['liq_fwd']) * weights[1] + 
                     z_series(factors['growth_now']) * weights[2] + z_series(factors['cycle_fwd']) * weights[3] - 
                     z_series(factors['stress_now']) * weights[4] - z_series(factors['rates_fwd']) * weights[5])
         
         strat_returns = hist_cms.shift(1) * spx_ret
-        recent_sharpe = (strat_returns.tail(60).mean() / (strat_returns.tail(60).std() + 1e-6)) * np.sqrt(252)
-        ml_confidence = int(np.clip(50 + (recent_sharpe * 25), 10, 100))
+        
+        # 3 Farklı Zaman Diliminin Sharpe Rasyoları
+        sharpe_20 = (strat_returns.tail(20).mean() / (strat_returns.tail(20).std() + 1e-6)) * np.sqrt(252)  # Kısa Vade
+        sharpe_60 = (strat_returns.tail(60).mean() / (strat_returns.tail(60).std() + 1e-6)) * np.sqrt(252)  # Orta Vade
+        sharpe_120 = (strat_returns.tail(120).mean() / (strat_returns.tail(120).std() + 1e-6)) * np.sqrt(252) # Uzun Vade
+        
+        # Ensemble (Ağırlıklı) Sharpe: %20 Kısa, %50 Orta, %30 Uzun
+        ensemble_sharpe = (sharpe_20 * 0.20) + (sharpe_60 * 0.50) + (sharpe_120 * 0.30)
+        
+        ml_confidence = int(np.clip(50 + (ensemble_sharpe * 25), 10, 100))
 
         # 7. DİNAMİK PORTFÖY BOYUTLANDIRMA
         eq_raw = 50 + (float(cms) * 25) - ((float(vix_val) - 15) * 1.5)
@@ -159,7 +160,7 @@ class UltimateSentinelEngine:
             'yield_curve': round(float(raw['yc'].iloc[0] if not raw['yc'].empty else 0.0), 2),
             'w_str': ",".join([f"{w:.2f}" for w in weights]),
             'vix_term': round(float(vix_term), 3),
-            'oil_trend': round(float(oil_trend), 3), # YENİ Z-SKORLU VERİ
+            'oil_trend': round(float(oil_trend), 3),
             'ml_confidence': ml_confidence,
             'eq_weight': eq_weight,
             'bond_weight': bond_weight,
@@ -176,4 +177,4 @@ if __name__ == "__main__":
             pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last').to_csv(HISTORY_FILE, index=False)
         else:
             df_new.to_csv(HISTORY_FILE, index=False)
-        print("Success: Ultimate Pro Quant CMS Updated with Macro-Confirmed Oil Z-Score.")
+        print("Success: Updated with Ensemble ML Auditor (20d-60d-120d).")
