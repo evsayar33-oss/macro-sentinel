@@ -40,14 +40,14 @@ if os.path.exists("cms_history.csv"):
         else: emtia_notu = "⚖️ Nötr (Geçici/Sahte Dalgalanma)"
 
         # ========================================================
-        # YENİ: DİNAMİK METİN ZEKASI (ML DENETÇİYE SENKRONİZE EDİLDİ)
+        # DİNAMİK METİN ZEKASI (ESKİ SÜTUN DÜZENİNE UYARLANDI)
         # ========================================================
-        if ml_conf < 40: # Denetçi piyasada düşüş/kriz tespit ettiyse!
+        if ml_conf < 40: # Denetçi (Ensemble) piyasada düşüş tespit ettiyse!
             yabanci_durum = "📉 Düzeltme (Uzak Dur)"
             hisse_durum = "⚠️ Düşüş Riski (İzleme)"
             kripto_durum = "⚠️ Satış Baskısı"
         else: # Denetçi onay veriyorsa normal makro skora bak
-            yabanci_durum = "🔥 Al" if val > 0.2 else ("✅ Kademeli Topla" if val >= 0.0 else "⚠️ Defansif")
+            yabanci_durum = "✅ Pozitif" if val > 0.0 else "⚠️ Defansif"
             hisse_durum = "✅ Tam Kapasite" if val > 0.4 else "⚪ İzle"
             kripto_durum = "🚀 Agresif Al" if val > 0.4 else "⚪ İzle"
 
@@ -55,9 +55,11 @@ if os.path.exists("cms_history.csv"):
         v1, v2, v3 = st.columns(3)
         
         with v1:
-            st.markdown(f"### 🚀 Büyüme (Risk-On)\n* **Yabancı Endeksler:** {yabanci_durum}\n* **Yerli Hisseler:** {hisse_durum}\n* **Kripto:** {kripto_durum}\n* **Teknoloji/Sanayi:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
+            # "Yerli" kelimesi kaldırıldı, orijinal haline döndü.
+            st.markdown(f"### 🚀 Büyüme (Risk-On)\n* **Hisseler:** {hisse_durum}\n* **Kripto:** {kripto_durum}\n* **Endüstriyel/Teknoloji:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
         with v2:
-            st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'🔥 Al' if rr > 1.8 else '✅ Pozitif'}\n* **Tahviller:** {'✅ Ekle' if rr > 1.0 else '⚠️ Azalt'}\n* **Para Piyasası (Likit):** {'🔥 Maksimum Ağırlık' if ml_conf < 40 else '✅ Stabil'}")
+            # Yabancı Endeksler eski yerine (2. Sütun) alındı, Para Piyasası silindi.
+            st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'🔥 Al' if rr > 1.8 else '✅ Pozitif'}\n* **Tahviller:** {'✅ Ekle' if rr > 1.0 else '⚠️ Azalt'}\n* **Yabancı Endeksler:** {yabanci_durum}")
         with v3:
             f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif"
             st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar (Enerji):** {emtia_notu}\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
