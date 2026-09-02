@@ -1,37 +1,40 @@
-name: Macro Sentinel Engine
+name: Ultimate Macro Sentinel Auto-Updater
 
 on:
+  # 1. OTOMATİK ÇALIŞMA (CRON)
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    # Her gün hafta içi (Pazartesi-Cuma) UTC saatiyle 21:00'da çalışır (Türkiye saatiyle gece 00:00)
+    - cron: '0 21 * * 1-5' 
+    
+  # 2. MANUEL ÇALIŞTIRMA (İstediğin zaman butona basabilmen için)
+  workflow_dispatch: 
 
 jobs:
-  build:
+  update-data:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Checkout Repo
+      - name: Dosyaları Çek (Checkout)
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Python Kurulumu
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Gerekli Kütüphaneleri Yükle
         run: |
-          pip install pandas numpy yfinance requests pytz streamlit
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy yfinance pytz
 
-      - name: Run Sentinel Engine
+      - name: Yapay Zeka Motorunu Çalıştır (main.py)
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python main.py
 
-      - name: Save and Commit
+      - name: Yeni Verileri Github'a Kaydet ve Yükle
         run: |
-          git config --global user.name "MacroBot"
-          git config --global user.email "bot@macro.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add cms_history.csv
-          git commit -m "Update CMS History: $(date)" || echo "No change"
+          git commit -m "🤖 Auto-Update: Makro Veriler Güncellendi" || echo "Değişiklik yok"
           git push
