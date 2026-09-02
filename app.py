@@ -17,8 +17,6 @@ if os.path.exists("cms_history.csv"):
         bnd_w = latest.get('bond_weight', 30)
         csh_w = latest.get('cash_weight', 20)
         act_growth = latest.get('active_growth_name', 'Bakir/Altin')
-        
-        # YENİ: Z-Skorlu Petrol Makro Teyidi
         oil_trend = latest.get('oil_trend', 0.0)
         
         # REJİM BELİRLEME
@@ -37,8 +35,6 @@ if os.path.exists("cms_history.csv"):
         """, unsafe_allow_html=True)
 
         a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
-        
-        # YENİ YORUMLAMA: Z-Skor 1.0'ı geçerse (1 standart sapma + büyüme teyidi)
         if oil_trend >= 1.0: emtia_notu = "🔥 Enerji/Petrol Al (Makro Teyitli)"
         elif oil_trend <= -1.0: emtia_notu = "⚠️ Zayıf (Talep Yok / Düşüş)"
         else: emtia_notu = "⚖️ Nötr (Geçici/Sahte Dalgalanma)"
@@ -71,12 +67,13 @@ if os.path.exists("cms_history.csv"):
         st.divider()
         st.subheader("⚖️ Dinamik Risk Paritesi (Makro-Sensörlü)")
         
+        # YENİ: Metni "Ensemble (Çoklu-Vade)" olarak güncelledik.
         if ml_conf >= 75:
-            auditor_msg = f"🟢 **ML Denetçi Skoru: %{ml_conf}** (Ana model onaylandı, portföy optimum.)"
+            auditor_msg = f"🟢 **Ensemble Denetçi Skoru: %{ml_conf}** (Ana model onaylandı, portföy optimum.)"
         elif 40 <= ml_conf < 75:
-            auditor_msg = f"🟡 **ML Denetçi Skoru: %{ml_conf}** (Piyasada karmaşa var, riskli varlıklar hafif kısıldı.)"
+            auditor_msg = f"🟡 **Ensemble Denetçi Skoru: %{ml_conf}** (Piyasada karmaşa var, riskli varlıklar hafif kısıldı.)"
         else:
-            auditor_msg = f"🔴 **ML Denetçi Skoru: %{ml_conf}** (ACİL FREN: Formül zayıfladı, hisse ağırlığı zorla düşürüldü!)"
+            auditor_msg = f"🔴 **Ensemble Denetçi Skoru: %{ml_conf}** (ACİL FREN: Tüm vadelerde zayıflama var, hisse ağırlığı düşürüldü!)"
             
         st.caption(auditor_msg)
         
