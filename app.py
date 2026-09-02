@@ -39,14 +39,11 @@ if os.path.exists("cms_history.csv"):
         elif oil_trend <= -1.0: emtia_notu = "⚠️ Zayıf (Talep Yok / Düşüş)"
         else: emtia_notu = "⚖️ Nötr (Geçici/Sahte Dalgalanma)"
 
-        # ========================================================
-        # DİNAMİK METİN ZEKASI (ESKİ SÜTUN DÜZENİNE UYARLANDI)
-        # ========================================================
-        if ml_conf < 40: # Denetçi (Ensemble) piyasada düşüş tespit ettiyse!
+        if ml_conf < 40: 
             yabanci_durum = "📉 Düzeltme (Uzak Dur)"
             hisse_durum = "⚠️ Düşüş Riski (İzleme)"
             kripto_durum = "⚠️ Satış Baskısı"
-        else: # Denetçi onay veriyorsa normal makro skora bak
+        else: 
             yabanci_durum = "✅ Pozitif" if val > 0.0 else "⚠️ Defansif"
             hisse_durum = "✅ Tam Kapasite" if val > 0.4 else "⚪ İzle"
             kripto_durum = "🚀 Agresif Al" if val > 0.4 else "⚪ İzle"
@@ -55,16 +52,14 @@ if os.path.exists("cms_history.csv"):
         v1, v2, v3 = st.columns(3)
         
         with v1:
-            # "Yerli" kelimesi kaldırıldı, orijinal haline döndü.
-            st.markdown(f"### 🚀 Büyüme (Risk-On)\n* **Hisseler:** {hisse_durum}\n* **Kripto:** {kripto_durum}\n* **Endüstriyel/Teknoloji:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
+            # "Endüstriyel/Teknoloji" yerine "Bakır/Gümüş" yazıldı!
+            st.markdown(f"### 🚀 Büyüme (Risk-On)\n* **Hisseler:** {hisse_durum}\n* **Kripto:** {kripto_durum}\n* **Bakır/Gümüş:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
         with v2:
-            # Yabancı Endeksler eski yerine (2. Sütun) alındı, Para Piyasası silindi.
             st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'🔥 Al' if rr > 1.8 else '✅ Pozitif'}\n* **Tahviller:** {'✅ Ekle' if rr > 1.0 else '⚠️ Azalt'}\n* **Yabancı Endeksler:** {yabanci_durum}")
         with v3:
             f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif"
             st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar (Enerji):** {emtia_notu}\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
 
-        # DİNAMİK RİSK PARİTESİ ETİKETLEME
         if val > 0.4: risk_label = "Teknoloji, Kripto, Gümüş/Bakır"
         elif val > 0.2: risk_label = "Geniş Hisseler, Endüstriyel Emtia"
         elif val > 0.0: risk_label = "Yabancı Endeksler, Seçici Hisseler"
