@@ -17,6 +17,8 @@ if os.path.exists("cms_history.csv"):
         bnd_w = latest.get('bond_weight', 30)
         csh_w = latest.get('cash_weight', 20)
         act_growth = latest.get('active_growth_name', 'Bakir/Altin')
+        
+        # YENİ: Z-Skorlu Petrol Makro Teyidi
         oil_trend = latest.get('oil_trend', 0.0)
         
         # REJİM BELİRLEME
@@ -35,9 +37,11 @@ if os.path.exists("cms_history.csv"):
         """, unsafe_allow_html=True)
 
         a_notu = "Önerilmez (Faiz Baskısı)" if rr > 0.8 else "Güçlü Koruyucu"
-        if oil_trend > 0.05: emtia_notu = "🔥 Enerji/Petrol Al"
-        elif oil_trend < -0.05: emtia_notu = "⚠️ Zayıf (Uzak Dur)"
-        else: emtia_notu = "⚖️ Nötr (Seçici Ol)"
+        
+        # YENİ YORUMLAMA: Z-Skor 1.0'ı geçerse (1 standart sapma + büyüme teyidi)
+        if oil_trend >= 1.0: emtia_notu = "🔥 Enerji/Petrol Al (Makro Teyitli)"
+        elif oil_trend <= -1.0: emtia_notu = "⚠️ Zayıf (Talep Yok / Düşüş)"
+        else: emtia_notu = "⚖️ Nötr (Geçici/Sahte Dalgalanma)"
 
         st.subheader("🎯 Stratejik Varlık Analizi")
         v1, v2, v3 = st.columns(3)
@@ -50,24 +54,18 @@ if os.path.exists("cms_history.csv"):
             f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif"
             st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar (Enerji):** {emtia_notu}\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
 
-        # ==========================================
-        # YENİ: DİNAMİK RİSK PARİTESİ ETİKETLEME ZEKASI
-        # ==========================================
-        
-        # 1. Riskli Varlıklar Etiketi (Hisse/Emtia Seçimi)
+        # DİNAMİK RİSK PARİTESİ ETİKETLEME
         if val > 0.4: risk_label = "Teknoloji, Kripto, Gümüş/Bakır"
         elif val > 0.2: risk_label = "Geniş Hisseler, Endüstriyel Emtia"
         elif val > 0.0: risk_label = "Yabancı Endeksler, Seçici Hisseler"
         else: risk_label = "Sadece Defansif Hisseler (İzlemede)"
 
-        # 2. Sabit Getiri Etiketi (Tahvil/Gayrimenkul Seçimi)
         if rr > 1.8 and val > -0.2: bond_label = "Eurobond, Tahvil, Gayrimenkul"
         elif rr > 1.0: bond_label = "Tahvil, Eurobond"
         else: bond_label = "Kısa Vadeli Tahvil / Para Piyasası"
 
-        # 3. Koruma Etiketi (Altın/Petrol/Nakit Seçimi)
         if rr <= 0.8: safe_label = "Nakit, Fiziki Altın (Güçlü Koruma)"
-        elif oil_trend > 0.05: safe_label = "Nakit, Repo, Enerji (Hedge)"
+        elif oil_trend >= 1.0: safe_label = "Nakit, Repo, Enerji (Hedge)"
         else: safe_label = "Sadece Nakit / USD / Repo"
 
         st.divider()
