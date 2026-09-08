@@ -19,13 +19,26 @@ if os.path.exists("cms_history.csv"):
         act_growth = latest.get('active_growth_name', 'Bakir/Altin')
         oil_trend = latest.get('oil_trend', 0.0)
         
-        # REJİM BELİRLEME
-        if val > 0.4: reg, col, status = "LİKİDİTE BOĞASI (QE)", "#00ff00", "HÜCUM"
-        elif 0.0 < val <= 0.4: reg, col, status = "UZUN VADELİ KORUYUCU", "#76ff03", "STABİLİTE"
-        elif -0.4 <= val <= 0.0: reg, col, status = "SIKIŞMA / SAVUNMA", "#ffcc00", "SAVUNMA"
-        else: reg, col, status = "KRİZ / RESESYON", "#ff4b4b", "KORUMA"
+        # YENİ: Sistem Sağlık Verileri
+        api_durum = latest.get('api_status', 'Online')
+        emergency = latest.get('emergency', False)
+        son_guncelleme = latest.get('date', 'Bilinmiyor')
+        
+        # SİYAH KUĞU (EMERGENCY) EZİCİ MODU
+        if emergency:
+            reg, col, status = "🚨 SİSTEMİK ÇÖKÜŞ ALARMI (BLACK SWAN) 🚨", "#ff0000", "PANİK - %100 NAKİT"
+        else:
+            if val > 0.4: reg, col, status = "LİKİDİTE BOĞASI (QE)", "#00ff00", "HÜCUM"
+            elif 0.0 < val <= 0.4: reg, col, status = "UZUN VADELİ KORUYUCU", "#76ff03", "STABİLİTE"
+            elif -0.4 <= val <= 0.0: reg, col, status = "SIKIŞMA / SAVUNMA", "#ffcc00", "SAVUNMA"
+            else: reg, col, status = "KRİZ / RESESYON", "#ff4b4b", "KORUMA"
 
         st.title("🏛️ ULTIMATE MACRO SENTINEL (AUTONOMOUS AI)")
+        
+        # API Sağlık Göstergesi (Üstte ufak bir bar)
+        api_renk = "green" if api_durum == "Online" else "red"
+        st.markdown(f"<p style='text-align:right; font-size:12px; color:{api_renk};'>📡 API Durumu: {api_durum} | Son Veri: {son_guncelleme}</p>", unsafe_allow_html=True)
+
         st.markdown(f"""
             <div style="padding:20px; border-radius:15px; border:3px solid {col}; background:{col}05; text-align:center;">
                 <h1 style="color:{col}; margin:0;">{reg}</h1>
@@ -39,7 +52,11 @@ if os.path.exists("cms_history.csv"):
         elif oil_trend <= -1.0: emtia_notu = "⚠️ Zayıf (Talep Yok / Düşüş)"
         else: emtia_notu = "⚖️ Nötr (Geçici/Sahte Dalgalanma)"
 
-        if ml_conf < 40: 
+        if emergency:
+            yabanci_durum = "🚨 ÇÖKÜŞ - SAT"
+            hisse_durum = "🚨 ÇÖKÜŞ - SAT"
+            kripto_durum = "🚨 ÇÖKÜŞ - SAT"
+        elif ml_conf < 40: 
             yabanci_durum = "📉 Düzeltme (Uzak Dur)"
             hisse_durum = "⚠️ Düşüş Riski (İzleme)"
             kripto_durum = "⚠️ Satış Baskısı"
@@ -52,7 +69,6 @@ if os.path.exists("cms_history.csv"):
         v1, v2, v3 = st.columns(3)
         
         with v1:
-            # "Endüstriyel/Teknoloji" yerine "Bakır/Gümüş" yazıldı!
             st.markdown(f"### 🚀 Büyüme (Risk-On)\n* **Hisseler:** {hisse_durum}\n* **Kripto:** {kripto_durum}\n* **Bakır/Gümüş:** {'🔥 Al' if val > 0.2 else '⚪ Nötr'}")
         with v2:
             st.markdown(f"### 🛡️ Sabit/Düşük Risk\n* **Gayrimenkul:** {'✅ Stabil' if val > -0.2 else '⚠️ Bekle'}\n* **Eurobond:** {'🔥 Al' if rr > 1.8 else '✅ Pozitif'}\n* **Tahviller:** {'✅ Ekle' if rr > 1.0 else '⚠️ Azalt'}\n* **Yabancı Endeksler:** {yabanci_durum}")
@@ -60,23 +76,30 @@ if os.path.exists("cms_history.csv"):
             f_notu = "Reel Kazanç Yüksek" if rr > 1.8 else "Reel Kazanç Pozitif"
             st.markdown(f"### 🚨 Kriz Yönetimi\n* **Döviz Faiz:** ({f_notu})\n* **Emtialar (Enerji):** {emtia_notu}\n* **ETFler:** (Pozitif Akış)\n* **Altın:** ({a_notu})")
 
-        if val > 0.4: risk_label = "Teknoloji, Kripto, Gümüş/Bakır"
-        elif val > 0.2: risk_label = "Geniş Hisseler, Endüstriyel Emtia"
-        elif val > 0.0: risk_label = "Yabancı Endeksler, Seçici Hisseler"
-        else: risk_label = "Sadece Defansif Hisseler (İzlemede)"
+        if emergency:
+            risk_label = "TÜM RİSKLERİ SIFIRLA"
+            bond_label = "LİKİDİTE ŞOKU (TAHVİL BİLE RİSKLİ)"
+            safe_label = "SADECE USD / GÜNLÜK REPO"
+        else:
+            if val > 0.4: risk_label = "Teknoloji, Kripto, Gümüş/Bakır"
+            elif val > 0.2: risk_label = "Geniş Hisseler, Endüstriyel Emtia"
+            elif val > 0.0: risk_label = "Yabancı Endeksler, Seçici Hisseler"
+            else: risk_label = "Sadece Defansif Hisseler (İzlemede)"
 
-        if rr > 1.8 and val > -0.2: bond_label = "Eurobond, Tahvil, Gayrimenkul"
-        elif rr > 1.0: bond_label = "Tahvil, Eurobond"
-        else: bond_label = "Kısa Vadeli Tahvil / Para Piyasası"
+            if rr > 1.8 and val > -0.2: bond_label = "Eurobond, Tahvil, Gayrimenkul"
+            elif rr > 1.0: bond_label = "Tahvil, Eurobond"
+            else: bond_label = "Kısa Vadeli Tahvil / Para Piyasası"
 
-        if rr <= 0.8: safe_label = "Nakit, Fiziki Altın (Güçlü Koruma)"
-        elif oil_trend >= 1.0: safe_label = "Nakit, Repo, Enerji (Hedge)"
-        else: safe_label = "Sadece Nakit / USD / Repo"
+            if rr <= 0.8: safe_label = "Nakit, Fiziki Altın (Güçlü Koruma)"
+            elif oil_trend >= 1.0: safe_label = "Nakit, Repo, Enerji (Hedge)"
+            else: safe_label = "Sadece Nakit / USD / Repo"
 
         st.divider()
         st.subheader("⚖️ Dinamik Risk Paritesi (Makro-Sensörlü)")
         
-        if ml_conf >= 75:
+        if emergency:
+            auditor_msg = f"🔴🔴 **DEVRE KESİCİ DEVREDE!** Piyasada Margin-Call (Her şeye satış) veya Siyah Kuğu tespit edildi. Tüm bütçe nakite çekildi!"
+        elif ml_conf >= 75:
             auditor_msg = f"🟢 **Ensemble Denetçi Skoru: %{ml_conf}** (Ana model onaylandı, portföy optimum.)"
         elif 40 <= ml_conf < 75:
             auditor_msg = f"🟡 **Ensemble Denetçi Skoru: %{ml_conf}** (Piyasada karmaşa var, riskli varlıklar hafif kısıldı.)"
@@ -121,6 +144,6 @@ if os.path.exists("cms_history.csv"):
             st.write(f"VIX Eğrisi: **{vix_term:.2f}** ({vix_durum})")
             
         st.subheader("📈 CMS Döngü Takibi (Birleştirilmiş İvme)")
-        st.line_chart(df.set_index('date')['cms'].tail(30))
+        st.line_chart(df.set_index('date')['cms'].tail(50))
 else:
     st.info("Veri bekleniyor...")
