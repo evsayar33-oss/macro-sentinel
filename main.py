@@ -27,10 +27,11 @@ class UltimateSentinelEngine:
             obs = pd.DataFrame(r['observations'])[['date', 'value']]
             obs['value'] = pd.to_numeric(obs['value'], errors='coerce')
             return obs.set_index(pd.to_datetime(obs['date']))['value'].dropna()
-        except: return pd.Series()
+        except: 
+            return pd.Series() # API Çökerse boş döner, sistem kilitlenmez.
 
     def run(self):
-        # 1. VERİ TOPLAMA
+        # 1. VERİ TOPLAMA (API KALKANI EKLENDİ)
         fred_ids = {
             'fed': 'WALCL', 'ecb': 'ECBASSETSW', 'boj': 'JPNASSETS', 
             'rrp': 'RRPONTSYD', 'tga': 'WTREGEN', 'spread': 'BAMLH0A0HYM2', 
@@ -38,8 +39,14 @@ class UltimateSentinelEngine:
             'yc': 'T10Y2Y'
         }
         raw = {k: self.fetch_fred(v) for k, v in fred_ids.items()}
-        y_data = yf.download(["HG=F", "SI=F", "GC=F", "ES=F", "EURUSD=X", "JPYUSD=X", "^VIX", "^VIX3M", "SOXX", "CL=F"], period="2y", progress=False)['Close'].ffill()
         
+        # YENİ: TLT (Tahvil ETF'i) eklendi (Korelasyon ölçümü için)
+        try:
+            y_data = yf.download(["HG=F", "SI=F", "GC=F", "ES=F", "EURUSD=X", "JPYUSD=X", "^VIX", "^VIX3M", "SOXX", "CL=F", "TLT"], period="2y", progress=False)['Close'].ffill()
+            api_status = "Online"
+        except:
+            api_status = "Offline" # API çökerse sistem bunu bilecek
+            
         # 2. LİKİDİTE KALİBRASYONU 
         try:
             cur_eur = y_data['EURUSD=X'].iloc[-1]
@@ -58,20 +65,17 @@ class UltimateSentinelEngine:
         tga_s = raw['tga'].reindex(y_data.index, method='ffill').fillna(0)
         rrp_s = raw['rrp'].reindex(y_data.index, method='ffill').fillna(0)
         ndl_s = fed_s - tga_s - (rrp_s * 1000)
-
         spx_ret = y_data['ES=F'].pct_change().shift(-1)
         
-        # 3. DARWİNİST ÖZELLİK TURNUVASI 
+        # 3. DARWİNİST TURNUVA VE PETROL
         growth_proxies = {
             'Bakir/Altin': (y_data['HG=F'] / y_data['GC=F']).ffill(),
             'Gumus/Altin': (y_data['SI=F'] / y_data['GC=F']).ffill(),
             'YariIletken/Altin': (y_data['SOXX'] / y_data['GC=F']).ffill()
         }
-        
         best_corr = -1
         active_growth_name = 'Bakir/Altin'
         active_growth_series = growth_proxies['Bakir/Altin']
-        
         for name, series in growth_proxies.items():
             if not series.dropna().empty:
                 corr = series.pct_change().tail(90).corr(spx_ret.tail(90))
@@ -80,14 +84,34 @@ class UltimateSentinelEngine:
                     active_growth_name = name
                     active_growth_series = series
 
-        # PETROL RADARI (Makro Teyitli)
         try:
             oil_series = y_data['CL=F'].tail(30)
             oil_z = (oil_series.iloc[-1] - oil_series.mean()) / (oil_series.std() + 1e-6)
             macro_conf = 1 if active_growth_series.diff(20).iloc[-1] > 0 else -1
             oil_trend = float(oil_z * macro_conf)
+        except: oil_trend = 0.0
+
+        # ==========================================
+        # YENİ MÜHENDİSLİK: SİYAH KUĞU VE ÇÖKÜŞ SENSÖRÜ
+        # ==========================================
+        try:
+            # 1. Devre Kesici: VIX 35'i geçerse veya 5 günde %40 zıplarsa
+            vix_val = raw['vix'].iloc[0] if not raw['vix'].empty else 15.0
+            vix_spike = (y_data['^VIX'].iloc[-1] / y_data['^VIX'].iloc[-5]) - 1
+            circuit_breaker = (vix_val > 35) or (vix_spike > 0.40)
+            
+            # 2. Korelasyon 1.0 (Likidite Şoku) Sensörü: S&P, Altın ve Tahvil aynı anda çöküyorsa
+            spx_ret_5d = (y_data['ES=F'].iloc[-1] / y_data['ES=F'].iloc[-5]) - 1
+            gold_ret_5d = (y_data['GC=F'].iloc[-1] / y_data['GC=F'].iloc[-5]) - 1
+            tlt_ret_5d = (y_data['TLT'].iloc[-1] / y_data['TLT'].iloc[-5]) - 1
+            
+            # Eğer Hisse %3'ten fazla, Altın ve Tahvil %1.5'ten fazla DÜŞÜYORSA -> Margin Call Şoku!
+            margin_call_shock = (spx_ret_5d < -0.03) and (gold_ret_5d < -0.015) and (tlt_ret_5d < -0.015)
+            
+            emergency_mode = circuit_breaker or margin_call_shock
         except:
-            oil_trend = 0.0
+            emergency_mode = False
+        # ==========================================
 
         # 4. YÜKSELTİLMİŞ DİNAMİK IC MOTORU
         factors = pd.DataFrame({
@@ -102,13 +126,11 @@ class UltimateSentinelEngine:
         corrs = factors.tail(90).corrwith(spx_ret.tail(90)).abs().fillna(0)
         weights = softmax(corrs.values) if corrs.sum() > 0.01 else np.array([0.16]*6)
 
-        # 5. BİRLEŞTİRİLMİŞ SKOR ÜRETİMİ (Z-Score)
         def z_series(series):
             return (series - series.mean()) / (series.std() + 1e-6) 
         
         pmi_z = raw['pmi'].iloc[0] if not raw['pmi'].empty else 0.0
         pmi_z = (pmi_z - raw['pmi'].mean()) / (raw['pmi'].std() + 1e-6) if not raw['pmi'].empty else 0.0
-        vix_val = raw['vix'].iloc[0] if not raw['vix'].empty else 15.0
         
         cms = (z_series(factors['liq_now']).iloc[-1] * weights[0] + 
                z_series(factors['liq_fwd']).iloc[-1] * weights[1] + 
@@ -121,34 +143,40 @@ class UltimateSentinelEngine:
             vix_term = y_data['^VIX'].iloc[-1] / y_data['^VIX3M'].iloc[-1]
         except: vix_term = 0.85 
 
-        # 6. YENİ: ENSEMBLE (ÇOKLU-VADE) ML AUDITOR
+        # 6. ENSEMBLE (ÇOKLU-VADE) ML AUDITOR
         hist_cms = (z_series(factors['liq_now']) * weights[0] + z_series(factors['liq_fwd']) * weights[1] + 
                     z_series(factors['growth_now']) * weights[2] + z_series(factors['cycle_fwd']) * weights[3] - 
                     z_series(factors['stress_now']) * weights[4] - z_series(factors['rates_fwd']) * weights[5])
         
         strat_returns = hist_cms.shift(1) * spx_ret
         
-        # 3 Farklı Zaman Diliminin Sharpe Rasyoları
-        sharpe_20 = (strat_returns.tail(20).mean() / (strat_returns.tail(20).std() + 1e-6)) * np.sqrt(252)  # Kısa Vade
-        sharpe_60 = (strat_returns.tail(60).mean() / (strat_returns.tail(60).std() + 1e-6)) * np.sqrt(252)  # Orta Vade
-        sharpe_120 = (strat_returns.tail(120).mean() / (strat_returns.tail(120).std() + 1e-6)) * np.sqrt(252) # Uzun Vade
+        sharpe_20 = (strat_returns.tail(20).mean() / (strat_returns.tail(20).std() + 1e-6)) * np.sqrt(252)
+        sharpe_60 = (strat_returns.tail(60).mean() / (strat_returns.tail(60).std() + 1e-6)) * np.sqrt(252)
+        sharpe_120 = (strat_returns.tail(120).mean() / (strat_returns.tail(120).std() + 1e-6)) * np.sqrt(252)
         
-        # Ensemble (Ağırlıklı) Sharpe: %20 Kısa, %50 Orta, %30 Uzun
         ensemble_sharpe = (sharpe_20 * 0.20) + (sharpe_60 * 0.50) + (sharpe_120 * 0.30)
-        
         ml_confidence = int(np.clip(50 + (ensemble_sharpe * 25), 10, 100))
 
-        # 7. DİNAMİK PORTFÖY BOYUTLANDIRMA
-        eq_raw = 50 + (float(cms) * 25) - ((float(vix_val) - 15) * 1.5)
-        eq_weight_primary = np.clip(eq_raw, 0, 100)
-        
-        eq_weight = int(eq_weight_primary * (ml_confidence / 100.0))
-        bnd_raw = 30 - (float(cms) * 10) + (float(raw['tips'].iloc[0] if not raw['tips'].empty else 1.0) * 5)
-        bond_weight = int(np.clip(bnd_raw, 0, 100 - eq_weight))
-        cash_weight = 100 - eq_weight - bond_weight
+        # 7. DİNAMİK PORTFÖY BOYUTLANDIRMA & ACİL DURUM EZİCİSİ (OVERRIDE)
+        if emergency_mode:
+            # Siyah kuğu gelirse matematik çöpe atılır, sistem %100 Nakite kilitlenir!
+            eq_weight = 0
+            bond_weight = 0
+            cash_weight = 100
+            ml_confidence = 0 # Güven skoru sıfırlanır
+        else:
+            # Normal işleyiş
+            eq_raw = 50 + (float(cms) * 25) - ((float(vix_val) - 15) * 1.5)
+            eq_weight_primary = np.clip(eq_raw, 0, 100)
+            eq_weight = int(eq_weight_primary * (ml_confidence / 100.0))
+            bnd_raw = 30 - (float(cms) * 10) + (float(raw['tips'].iloc[0] if not raw['tips'].empty else 1.0) * 5)
+            bond_weight = int(np.clip(bnd_raw, 0, 100 - eq_weight))
+            cash_weight = 100 - eq_weight - bond_weight
 
         return {
-            'date': datetime.now(pytz.timezone('Europe/Istanbul')).strftime('%Y-%m-%d'),
+            'date': datetime.now(pytz.timezone('Europe/Istanbul')).strftime('%Y-%m-%d %H:%M'),
+            'api_status': api_status, # YENİ: Arayüze sistem durumu gönderiliyor
+            'emergency': bool(emergency_mode), # YENİ: Çöküş Sensörü
             'cms': round(float(np.nan_to_num(cms)), 4),
             'ndl': round(float(ndl), 0),
             'g3_liq': round(float(g3_liq), 0),
@@ -174,7 +202,8 @@ if __name__ == "__main__":
         df_new = pd.DataFrame([res])
         if os.path.exists(HISTORY_FILE):
             df_old = pd.read_csv(HISTORY_FILE)
-            pd.concat([df_old, df_new]).drop_duplicates(subset='date', keep='last').to_csv(HISTORY_FILE, index=False)
+            # Tarih formatına saat de eklendiği için subset'i güvenceye alıyoruz
+            pd.concat([df_old, df_new]).to_csv(HISTORY_FILE, index=False)
         else:
             df_new.to_csv(HISTORY_FILE, index=False)
-        print("Success: Updated with Ensemble ML Auditor (20d-60d-120d).")
+        print("Success: Updated with Black Swan & Emergency Override Systems.")
