@@ -261,12 +261,12 @@
   },
   "backtest_metrics": {
     "strategy": {
-      "annualized_return": 4.46,
-      "annualized_volatility": 5.43,
-      "sharpe_ratio": 0.11,
-      "max_drawdown": 15.78,
-      "calmar_ratio": 0.28,
-      "total_return": 47.9
+      "annualized_return": 3.38,
+      "annualized_volatility": 4.15,
+      "sharpe_ratio": -0.11,
+      "max_drawdown": 12.72,
+      "calmar_ratio": 0.27,
+      "total_return": 34.77
     },
     "benchmark_60_40": {
       "annualized_return": -1.62,

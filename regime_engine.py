@@ -424,9 +424,9 @@ class MacroRegimeEngine:
         out['regime_subtype'] = "Dengeli / Nötr Piyasa"
         out['hysteresis_days_left'] = 0
         out['conflict_note'] = ""
-        out['regime_eq_weight'] = 45.0
+        out['regime_eq_weight'] = 20.0
         out['regime_bond_weight'] = 35.0
-        out['regime_cash_weight'] = 20.0
+        out['regime_cash_weight'] = 45.0
 
         current_confirmed_id = 0
         current_confirmed_name = "REJIMSIZ_GECIS"
@@ -485,7 +485,7 @@ class MacroRegimeEngine:
             3: {"equity": 25, "bond": 15, "cash": 60},  # Reel Faiz Şoku
             4: {"equity": 10, "bond": 30, "cash": 60},  # Kredi Temerrüt Baskısı
             5: {"equity": 80, "bond": 15, "cash": 5},   # Küresel Likidite Rallisi (Risk-On)
-            0: {"equity": 45, "bond": 35, "cash": 20}   # REJIMSIZ_GECIS
+            0: {"equity": 20, "bond": 35, "cash": 45}   # Belirsiz / Geçiş: Nakit Kraldır (Cash is King)   # REJIMSIZ_GECIS
         }
         return weights_map.get(regime_id, {"equity": 45, "bond": 35, "cash": 20})
 
@@ -537,10 +537,10 @@ class MacroRegimeEngine:
             }
         else:
             return {
-                "hisse": "⚖️ Dengeli / Seçici Hisseler (Defansif Ağırlıklı)",
-                "tahvil": "✅ Sabit Getiri / Kupon Geliri (%35)",
-                "kripto": "⚪ İzleme Modu / Trend Takibi",
-                "emtia": "⚖️ Nötr",
-                "altin": "✅ Portföy Sigortası (%10-15)",
-                "nakit": "🛡️ Fırsat Bütçesi (%20)"
+                "hisse": "⚠️ Düşük Ağırlık (%20) / Yalnızca Defansif ve Nakit Akışı Güçlü Şirketler",
+                "tahvil": "✅ Sabit Getiri (%35) / Kupon ve Yüksek Reel Faiz Getirisi",
+                "kripto": "❌ Risk Kes / Belirsizlikte Ağırlığı Sıfırla veya İzleme Modu",
+                "emtia": "⚖️ Nötr / Enerji Şoklarına Karşı Kısmi Koruma",
+                "altin": "🔥 Güvenli Liman & Portföy Sigortası (%15)",
+                "nakit": "🛡️ EN YÜKSEK AĞIRLIK (%45) / Para Piyasası Fonları ve Risksiz Getiri (%5+)"
             }
