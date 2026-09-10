@@ -68,9 +68,9 @@
         ]
       },
       "default_allocation": {
-        "cash": 50,
+        "cash": 40,
         "gold": 25,
-        "commodity": 20,
+        "commodity": 30,
         "bond": 5,
         "equity": 0,
         "crypto": 0
