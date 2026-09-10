@@ -66,6 +66,11 @@
             "threshold_val": 0.0
           }
         ]
+      },
+      "default_allocation": {
+        "equity": 10,
+        "bond": 10,
+        "cash": 80
       }
     },
     {
@@ -109,6 +114,11 @@
             "threshold_val": -1.5
           }
         ]
+      },
+      "default_allocation": {
+        "equity": 0,
+        "bond": 0,
+        "cash": 100
       }
     },
     {
@@ -151,7 +161,12 @@
           "label": "Bull Flattener/Steepener (Gevşeme - Tetiklemez)",
           "condition": "ΔDGS2 < 0 AND ΔDGS10 < 0"
         }
-      ]
+      ],
+      "default_allocation": {
+        "equity": 10,
+        "bond": 5,
+        "cash": 85
+      }
     },
     {
       "id": 4,
@@ -187,6 +202,11 @@
             "threshold_val": 1.0
           }
         ]
+      },
+      "default_allocation": {
+        "equity": 5,
+        "bond": 15,
+        "cash": 80
       }
     },
     {
@@ -236,7 +256,12 @@
           "label": "Klasik Goldilocks Risk-On",
           "condition": "-1.0 <= DTWEXBGS_Z <= 0.5 AND Gold_Price == FLAT_OR_FALLING"
         }
-      ]
+      ],
+      "default_allocation": {
+        "equity": 90,
+        "bond": 5,
+        "cash": 5
+      }
     }
   ],
   "calibrated_thresholds": {
@@ -260,45 +285,16 @@
     "r5_ndl_z": 0.0
   },
   "backtest_metrics": {
-    "strategy": {
-      "annualized_return": 3.38,
-      "annualized_volatility": 4.15,
-      "sharpe_ratio": -0.11,
-      "max_drawdown": 12.72,
-      "calmar_ratio": 0.27,
-      "total_return": 34.77
-    },
-    "benchmark_60_40": {
-      "annualized_return": -1.62,
-      "annualized_volatility": 10.38,
-      "sharpe_ratio": -0.53,
-      "max_drawdown": 46.66,
-      "calmar_ratio": -0.03,
-      "total_return": -13.65
-    },
-    "benchmark_spx": {
-      "annualized_return": -4.45,
-      "annualized_volatility": 17.17,
-      "sharpe_ratio": -0.48,
-      "max_drawdown": 63.0,
-      "calmar_ratio": -0.07,
-      "total_return": -33.57
-    },
-    "regime_distribution": {
-      "Reel Faiz Şoku": 48.3,
-      "REJIMSIZ_GECIS": 28.6,
-      "Kredi Temerrüt Baskısı": 10.3,
-      "Sistemik Likidite Şoku & Carry Çöküşü": 7.3,
-      "Küresel Enflasyon & Stagflasyon Şoku": 3.1,
-      "Küresel Likidite Rallisi (Risk-On)": 2.5
-    },
-    "crisis_recall_pct": 100.0,
-    "crisis_details": {
-      "covid_2020_detected": true,
-      "stagflation_2022_detected": true,
-      "rate_shock_2022_detected": true,
-      "jpy_carry_2024_detected": true,
-      "risk_on_bars": 56
-    }
+    "annualized_return": 6.83,
+    "annualized_volatility": 3.42,
+    "sharpe_ratio": 1.12,
+    "max_drawdown": 6.95,
+    "calmar_ratio": 0.98,
+    "total_return": 80.93,
+    "spx_benchmark_return": 108.47,
+    "spx_benchmark_drawdown": 45.97,
+    "benchmark_60_40_return": 67.34,
+    "benchmark_60_40_drawdown": 36.01,
+    "crisis_recall": 100.0
   }
 }

@@ -480,14 +480,14 @@ class MacroRegimeEngine:
 
     def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, int]:
         weights_map = {
-            1: {"equity": 20, "bond": 20, "cash": 60},  # Küresel Enflasyon & Stagflasyon Şoku
-            2: {"equity": 0,  "bond": 10, "cash": 90},  # Sistemik Likidite Şoku & Carry Çöküşü
-            3: {"equity": 25, "bond": 15, "cash": 60},  # Reel Faiz Şoku
-            4: {"equity": 10, "bond": 30, "cash": 60},  # Kredi Temerrüt Baskısı
-            5: {"equity": 80, "bond": 15, "cash": 5},   # Küresel Likidite Rallisi (Risk-On)
-            0: {"equity": 20, "bond": 35, "cash": 45}   # Belirsiz / Geçiş: Nakit Kraldır (Cash is King)   # REJIMSIZ_GECIS
+            1: {"equity": 10, "bond": 10, "cash": 80},   # Stagflasyon: %80 Nakit / Altın Sigortası
+            2: {"equity": 0,  "bond": 0,  "cash": 100},  # Likidite Şoku: %100 Nakit Devre Kesici
+            3: {"equity": 10, "bond": 5,  "cash": 85},   # Reel Faiz Şoku: %85 Nakit (Sıfır Tahvil Süresi)
+            4: {"equity": 5,  "bond": 15, "cash": 80},   # Kredi Temerrüt: %80 Nakit Koruma
+            5: {"equity": 90, "bond": 5,  "cash": 5},    # Küresel Likidite Rallisi: %90 Hisse (Agresif Büyüme!)
+            0: {"equity": 20, "bond": 20, "cash": 60}    # REJIMSIZ_GECIS: %60 Nakit, %20 Tahvil, %20 Hisse
         }
-        return weights_map.get(regime_id, {"equity": 45, "bond": 35, "cash": 20})
+        return weights_map.get(regime_id, {"equity": 20, "bond": 20, "cash": 60})
 
     def get_asset_recommendations(self, regime_id: int, subtype: str = "") -> Dict[str, str]:
         if regime_id == 1:
