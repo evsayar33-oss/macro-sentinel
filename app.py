@@ -58,10 +58,22 @@ if os.path.exists(HISTORY_FILE):
         h_days = int(latest.get('hysteresis_days_left', 0))
         conflict_note = str(latest.get('conflict_note', 'No conflict detected'))
 
-        # Portfolio Weights
-        eq_w = int(latest.get('eq_weight', 45))
-        bnd_w = int(latest.get('bond_weight', 35))
-        csh_w = int(latest.get('cash_weight', 20))
+        # Portfolio Weights (Defensive in transition: Cash is King)
+        try:
+            from regime_engine import MacroRegimeEngine
+            _engine = MacroRegimeEngine()
+            _w = _engine.get_portfolio_weights(int(regime_id), regime_subtype)
+            default_eq, default_bnd, default_csh = _w['equity'], _w['bond'], _w['cash']
+        except Exception:
+            default_eq, default_bnd, default_csh = 20, 35, 45
+
+        raw_eq = latest.get('eq_weight')
+        raw_bnd = latest.get('bond_weight')
+        raw_csh = latest.get('cash_weight')
+
+        eq_w = int(raw_eq) if pd.notna(raw_eq) else default_eq
+        bnd_w = int(raw_bnd) if pd.notna(raw_bnd) else default_bnd
+        csh_w = int(raw_csh) if pd.notna(raw_csh) else default_csh
 
         # Color & Visual Mapping based on active Regime
         if emergency or regime_id == 2:
