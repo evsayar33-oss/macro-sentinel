@@ -350,16 +350,6 @@
       "calmar_ratio": 0.46,
       "total_return": 135.41
     },
-    "benchmark_spx": {
-      "name": "📈 Benchmark S&P 500 Buy & Hold",
-      "allocation_desc": "%100 SPX Buy & Hold",
-      "annualized_return": 8.53,
-      "annualized_volatility": 13.79,
-      "sharpe_ratio": 0.4,
-      "max_drawdown": 45.97,
-      "calmar_ratio": 0.19,
-      "total_return": 108.47
-    },
     "crisis_recall_pct": 100.0
   },
   "benchmarks": {

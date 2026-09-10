@@ -38,19 +38,6 @@
       "99% Worst Max DD": 26.05,
       "P(DD > 10%)": "%43.9",
       "P(DD > 20%)": "%5.7"
-    },
-    "📈 S&P 500 Buy & Hold": {
-      "Median 1Y Return": -11.21,
-      "5th Percentile": -39.41,
-      "95th Percentile": 23.17,
-      "VaR 95% (1Y)": 39.41,
-      "VaR 99% (1Y)": 48.51,
-      "CVaR 95% (ES)": 45.02,
-      "CVaR 99% (ES)": 53.06,
-      "Ortalama Max DD": 24.7,
-      "99% Worst Max DD": 51.85,
-      "P(DD > 10%)": "%95.2",
-      "P(DD > 20%)": "%61.9"
     }
   },
   "sensitivity_top_calmar": [

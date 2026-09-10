@@ -17,7 +17,6 @@ Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet an
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %10.96 | %5.22 | 1.52 | %20.63 (Yüksek Büyüme) | 0.53 | +%154.25 |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %7.70 | %2.27 | 2.07 | %3.41 (MİNİMUM DD) | 2.26 | +%94.69 |
 | 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %10.01 | %5.58 | 1.26 | %21.64 | 0.46 | +%135.41 |
-| 📈 **Benchmark S&P 500 Buy & Hold** | %100 SPX Buy & Hold | %8.53 | %13.79 | 0.40 | %45.97 (Ağır Çöküş) | 0.19 | +%108.47 |
 
 ---
 

@@ -7,7 +7,6 @@ Calibrated for Multi-Asset 6-Asset Architecture:
 3. Benchmark 2: Artemis Dragon Portfolio (%25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto)
 4. Benchmark 3: Taleb Barbell Asymmetric (%85 Nakit & T-Bill / %10 Altın / %5 Kripto - Ultra Düşük DD %3.41)
 5. Benchmark 4: All-Weather Plus (%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto)
-6. S&P 500 Buy & Hold (Referans - %100 Hisse)
 """
 
 import os
@@ -265,8 +264,7 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
                            0.10 * oil_ret +
                            0.05 * btc_ret)
 
-    # 6. Benchmark S&P 500 Buy & Hold
-    bench_spx_ret = spx_ret
+
 
     def calc_metrics(ret_series):
         ann_factor = 252.0
@@ -298,7 +296,6 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     art_metrics = calc_metrics(bench_art_ret)
     taleb_metrics = calc_metrics(bench_taleb_ret)
     allw_metrics = calc_metrics(bench_allweather_ret)
-    spx_metrics = calc_metrics(bench_spx_ret)
 
     covid_bars = df.loc["2020-03-01":"2020-03-31"]
     covid_detected = (covid_bars['confirmed_regime_id'] == 2).any()
@@ -321,7 +318,6 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
         "benchmark_artemis_dragon": art_metrics,
         "benchmark_taleb_barbell": taleb_metrics,
         "benchmark_allweather_plus": allw_metrics,
-        "benchmark_spx": spx_metrics,
         "regime_distribution": regime_dist,
         "crisis_details": {
             "covid_2020_detected": bool(covid_detected),
@@ -398,16 +394,6 @@ def main():
             "Calmar": f"{bt['benchmark_allweather_plus']['calmar_ratio']:.2f}",
             "Toplam Getiri (%)": f"+%{bt['benchmark_allweather_plus']['total_return']:.2f}"
         },
-        {
-            "Portföy / Strateji": "📈 Benchmark S&P 500 Buy & Hold",
-            "Varlık Dağılım Mimarisi": "%100 SPX Buy & Hold",
-            "Yıllık Getiri (%)": f"%{bt['benchmark_spx']['annualized_return']:.2f}",
-            "Volatilite (%)": f"%{bt['benchmark_spx']['annualized_volatility']:.2f}",
-            "Sharpe": f"{bt['benchmark_spx']['sharpe_ratio']:.2f}",
-            "Max DD (%)": f"%{bt['benchmark_spx']['max_drawdown']:.2f} (Ağır Çöküş)",
-            "Calmar": f"{bt['benchmark_spx']['calmar_ratio']:.2f}",
-            "Toplam Getiri (%)": f"+%{bt['benchmark_spx']['total_return']:.2f}"
-        }
     ])
     print(perf_summary.to_string(index=False))
 
@@ -438,11 +424,6 @@ def main():
             "allocation_desc": "%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto",
             **bt["benchmark_allweather_plus"]
         },
-        "benchmark_spx": {
-            "name": "📈 Benchmark S&P 500 Buy & Hold",
-            "allocation_desc": "%100 SPX Buy & Hold",
-            **bt["benchmark_spx"]
-        },
         "crisis_recall_pct": 100.0
     }
 
@@ -470,7 +451,6 @@ Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet an
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %{bt['benchmark_artemis_dragon']['annualized_return']:.2f} | %{bt['benchmark_artemis_dragon']['annualized_volatility']:.2f} | {bt['benchmark_artemis_dragon']['sharpe_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['max_drawdown']:.2f} (Yüksek Büyüme) | {bt['benchmark_artemis_dragon']['calmar_ratio']:.2f} | +%{bt['benchmark_artemis_dragon']['total_return']:.2f} |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %{bt['benchmark_taleb_barbell']['annualized_return']:.2f} | %{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f} | {bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} (MİNİMUM DD) | {bt['benchmark_taleb_barbell']['calmar_ratio']:.2f} | +%{bt['benchmark_taleb_barbell']['total_return']:.2f} |
 | 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %{bt['benchmark_allweather_plus']['annualized_return']:.2f} | %{bt['benchmark_allweather_plus']['annualized_volatility']:.2f} | {bt['benchmark_allweather_plus']['sharpe_ratio']:.2f} | %{bt['benchmark_allweather_plus']['max_drawdown']:.2f} | {bt['benchmark_allweather_plus']['calmar_ratio']:.2f} | +%{bt['benchmark_allweather_plus']['total_return']:.2f} |
-| 📈 **Benchmark S&P 500 Buy & Hold** | %100 SPX Buy & Hold | %{bt['benchmark_spx']['annualized_return']:.2f} | %{bt['benchmark_spx']['annualized_volatility']:.2f} | {bt['benchmark_spx']['sharpe_ratio']:.2f} | %{bt['benchmark_spx']['max_drawdown']:.2f} (Ağır Çöküş) | {bt['benchmark_spx']['calmar_ratio']:.2f} | +%{bt['benchmark_spx']['total_return']:.2f} |
 
 ---
 

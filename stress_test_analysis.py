@@ -42,13 +42,11 @@ def run_monte_carlo_stress_test(df_classified: pd.DataFrame, n_simulations: int 
     strat_ret = w_csh*cash_ret + w_gld*gold_ret + w_bnd*bond_ret + w_eq*spx_ret + w_cmd*oil_ret + w_crp*btc_ret
     def_ret = 0.35*cash_ret + 0.20*gold_ret + 0.20*bond_ret + 0.15*spx_ret + 0.05*oil_ret + 0.05*btc_ret
     art_ret = 0.25*spx_ret + 0.25*cash_ret + 0.20*gold_ret + 0.15*bond_ret + 0.10*oil_ret + 0.05*btc_ret
-    spx_only = spx_ret
 
     strategies = {
         "🏛️ Macro Sentinel Multi-Asset": strat_ret.values,
         "🛡️ Defensive Shield": def_ret.values,
         "🐉 Artemis Dragon": art_ret.values,
-        "📈 S&P 500 Buy & Hold": spx_only.values
     }
 
     mc_results = {}

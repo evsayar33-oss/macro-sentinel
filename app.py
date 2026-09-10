@@ -312,7 +312,6 @@ if os.path.exists(HISTORY_FILE):
                 b_art = bt_metrics.get("benchmark_artemis_dragon", {})
                 b_tal = bt_metrics.get("benchmark_taleb_barbell", {})
                 b_allw = bt_metrics.get("benchmark_allweather_plus", {})
-                bspx = bt_metrics.get("benchmark_spx", {})
 
                 st.markdown(f"""
 | Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
@@ -330,7 +329,7 @@ if os.path.exists(HISTORY_FILE):
                 ### 💡 Bu Çoklu Varlık Mimarisinin Kazandırdığı 3 Kritik Avantaj
                 
                 1. **Drawdown'un Yok Edilmesi:**
-                   * Geleneksel hisse ve benchmarkların **%45.97**'lik (SPX) çekilmesi, yeni çeşitlendirilmiş stratejilerde **%12.58**'e, dinamik modelde ise **%5.99**'a geriledi.
+                   * Klasik tek varlıklı hisse ağırlıklı stratejilerin %40-%50'yi aşan çekilme riskleri, çoklu varlık modelinde **%12.58**'e, dinamik Macro Sentinel Apex modelinde ise **%5.63**'e indirilmiştir.
                 2. **Krizlerden Hızlı Çıkış:**
                    * Altın ve emtia (özellikle petrol şoklarında) 2022 enflasyonunda tahvillerin uğradığı zararı tamamen sildi.
                    * Nakit ve T-Bill getirisi (%5+ risksiz dolar faizi), portföye sürekli pozitif nakit akışı sağlayarak düşüşlerin tabanını sertleştirdi.
