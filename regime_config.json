@@ -1,0 +1,304 @@
+{
+  "system_architecture": {
+    "module_name": "macro-event-interpretation-system",
+    "version": "1.0",
+    "principles": {
+      "mutual_exclusivity": true,
+      "active_regime_count": 1,
+      "normalization": "52_week_rolling_z_score",
+      "hysteresis_confirmation_period_weeks": 2,
+      "scoring_type": "deterministic"
+    }
+  },
+  "priority_rules": {
+    "category_priority": [
+      "SHOCK_REGIMES (1, 2, 3, 4)",
+      "RISK_ON_REGIME (5)"
+    ],
+    "conflict_resolution": "IF multiple shock regimes trigger, select the regime with the highest absolute Z-score of its main trigger indicator.",
+    "special_conflict_cases": [
+      {
+        "conflict": "Regime_1 vs Regime_3",
+        "resolution": "IF T10YIE 52w_Z > +0.5 THEN Regime_1 ELSE Regime_3"
+      }
+    ],
+    "fallback_rule": "IF no threshold is met THEN state = 'REJIMSIZ_GECIS' AND retain previous confirmed regime (hysteresis)."
+  },
+  "regimes": [
+    {
+      "id": 1,
+      "name": "Küresel Enflasyon & Stagflasyon Şoku",
+      "type": "SHOCK",
+      "triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Petrol Şoku",
+            "ticker": "Brent or WTI Spot",
+            "formula": "20_day_return_52w_zscore",
+            "threshold": "Z > 1.5",
+            "threshold_val": 1.5
+          },
+          {
+            "indicator": "Navlun/Ticaret Çöküşü",
+            "ticker": "Baltic Dry Index (BDI)",
+            "formula": "52w_zscore_level",
+            "threshold": "Z < -1.0",
+            "threshold_val": -1.0
+          }
+        ]
+      },
+      "confirmations": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Kredi Stresi",
+            "ticker": "FRED:BAMLH0A0HYM2 (HY OAS)",
+            "formula": "52w_zscore",
+            "threshold": "Z > 0.5",
+            "threshold_val": 0.5
+          },
+          {
+            "indicator": "Hisse/Tahvil Korelasyonu",
+            "ticker": "SPX & UST10Y Returns",
+            "formula": "60_day_rolling_correlation",
+            "threshold": "correlation > 0",
+            "threshold_val": 0.0
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Sistemik Likidite Şoku & Carry Çöküşü",
+      "type": "SHOCK",
+      "triggers": {
+        "logic": "OR_OR_OR",
+        "conditions": [
+          {
+            "indicator": "Geniş Dolar Gücü",
+            "ticker": "FRED:DTWEXBGS",
+            "formula": "5_day_change_52w_zscore",
+            "threshold": "Z > 1.0",
+            "threshold_val": 1.0
+          },
+          {
+            "indicator": "JPY Carry Unwind",
+            "ticker": "USD/JPY Spot",
+            "formula": "1_day_change_52w_zscore",
+            "threshold": "Z < -2.0",
+            "threshold_val": -2.0
+          },
+          {
+            "indicator": "Volatilite Şoku",
+            "ticker": "FRED:VIXCLS (VIX)",
+            "formula": "level_52w_zscore",
+            "threshold": "Z > 1.5",
+            "threshold_val": 1.5
+          }
+        ]
+      },
+      "confirmations": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Risk Varlığı Satışı",
+            "ticker": "BTC + SPX Equal-Weighted Basket",
+            "formula": "5_day_return_52w_zscore",
+            "threshold": "Z < -1.5",
+            "threshold_val": -1.5
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Reel Faiz Şoku",
+      "type": "SHOCK",
+      "triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Ana Tetikleyici (Reel Faiz)",
+            "ticker": "FRED:DFII10 (10Y TIPS)",
+            "formula": "1_day_change_52w_zscore",
+            "threshold": "Z > 1.5",
+            "threshold_val": 1.5
+          },
+          {
+            "indicator": "Ayrıştırıcı (Breakeven Enflasyon)",
+            "ticker": "FRED:T10YIE",
+            "formula": "52w_zscore",
+            "threshold": "Z < 0.5",
+            "threshold_val": 0.5
+          }
+        ]
+      },
+      "sub_types": [
+        {
+          "label": "Bear Steepener (Enflasyon/Term Premium)",
+          "condition": "ΔDGS2 < 0 AND ΔDGS10 > 0"
+        },
+        {
+          "label": "Bear Steepener (Fed Varyantı)",
+          "condition": "ΔDGS2 > 0 AND ΔDGS10 > 0 AND ΔDGS10 > ΔDGS2"
+        },
+        {
+          "label": "Bear Flattener (Fed Sıkılaştırma Baskın)",
+          "condition": "ΔDGS2 > 0 AND ΔDGS10 > 0 AND ΔDGS2 > ΔDGS10"
+        },
+        {
+          "label": "Bull Flattener/Steepener (Gevşeme - Tetiklemez)",
+          "condition": "ΔDGS2 < 0 AND ΔDGS10 < 0"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Kredi Temerrüt Baskısı",
+      "type": "SHOCK",
+      "triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Yüksek Getirili Spread",
+            "ticker": "FRED:BAMLH0A0HYM2 (HY OAS)",
+            "formula": "52w_zscore_level",
+            "threshold": "Z > 2.0",
+            "threshold_val": 2.0
+          },
+          {
+            "indicator": "Trend Teyidi",
+            "ticker": "FRED:BAMLH0A0HYM2 (HY OAS)",
+            "formula": "10_day_rolling_slope",
+            "threshold": "gradual_expansion (slope > 0)",
+            "threshold_val": 0.0
+          }
+        ]
+      },
+      "confirmations": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Yatırım Yapılabilir Spread",
+            "ticker": "FRED:BAMLC0A0CM (IG OAS)",
+            "formula": "52w_zscore_level",
+            "threshold": "Z > 1.0",
+            "threshold_val": 1.0
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "name": "Küresel Likidite Rallisi (Risk-On)",
+      "type": "RISK_ON",
+      "triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "indicator": "Kredi Gücü",
+            "ticker": "FRED:BAMLH0A0HYM2 (HY OAS)",
+            "formula": "52w_zscore",
+            "threshold": "Z < -0.5",
+            "threshold_val": -0.5
+          },
+          {
+            "indicator": "Dolar Rejimi",
+            "ticker": "FRED:DTWEXBGS",
+            "formula": "52w_zscore",
+            "threshold": "-1.0 <= Z <= 0.5",
+            "threshold_min": -1.0,
+            "threshold_max": 0.5
+          },
+          {
+            "indicator": "Volatilite",
+            "ticker": "VIX or MOVE",
+            "formula": "252_day_percentile",
+            "threshold": "percentile < 30",
+            "threshold_val": 30.0
+          },
+          {
+            "indicator": "Net Dolar Likiditesi",
+            "ticker": "CMS_NDL_SERIES",
+            "formula": "52w_zscore",
+            "threshold": "Z > 0",
+            "threshold_val": 0.0
+          }
+        ]
+      },
+      "sub_types_post_hoc": [
+        {
+          "label": "Reflasyonist Risk-On",
+          "condition": "DTWEXBGS_Z < -0.5 AND Gold_Price == RISING"
+        },
+        {
+          "label": "Klasik Goldilocks Risk-On",
+          "condition": "-1.0 <= DTWEXBGS_Z <= 0.5 AND Gold_Price == FLAT_OR_FALLING"
+        }
+      ]
+    }
+  ],
+  "calibrated_thresholds": {
+    "r1_oil_z": 1.3,
+    "r1_freight_z": -0.8,
+    "r1_hy_z": 0.4,
+    "r1_corr": 0.0,
+    "r2_dxy_z": 0.8,
+    "r2_jpy_z": -1.8,
+    "r2_vix_z": 1.3,
+    "r2_basket_z": -1.2,
+    "r3_tips_z": 1.3,
+    "r3_t10yie_z": 0.5,
+    "r4_hy_z": 1.8,
+    "r4_slope": 0.0,
+    "r4_ig_z": 0.8,
+    "r5_hy_z": -0.4,
+    "r5_dxy_min": -1.2,
+    "r5_dxy_max": 0.6,
+    "r5_vix_pct": 35.0,
+    "r5_ndl_z": 0.0
+  },
+  "backtest_metrics": {
+    "strategy": {
+      "annualized_return": 5.3,
+      "annualized_volatility": 5.77,
+      "sharpe_ratio": 0.25,
+      "max_drawdown": 13.55,
+      "calmar_ratio": 0.39,
+      "total_return": 59.04
+    },
+    "benchmark_60_40": {
+      "annualized_return": -1.62,
+      "annualized_volatility": 10.38,
+      "sharpe_ratio": -0.53,
+      "max_drawdown": 46.66,
+      "calmar_ratio": -0.03,
+      "total_return": -13.65
+    },
+    "benchmark_spx": {
+      "annualized_return": -4.45,
+      "annualized_volatility": 17.17,
+      "sharpe_ratio": -0.48,
+      "max_drawdown": 63.0,
+      "calmar_ratio": -0.07,
+      "total_return": -33.57
+    },
+    "regime_distribution": {
+      "REJIMSIZ_GECIS": 37.4,
+      "Reel Faiz Şoku": 25.4,
+      "Sistemik Likidite Şoku & Carry Çöküşü": 16.0,
+      "Kredi Temerrüt Baskısı": 13.7,
+      "Küresel Likidite Rallisi (Risk-On)": 4.5,
+      "Küresel Enflasyon & Stagflasyon Şoku": 3.0
+    },
+    "crisis_recall_pct": 100.0,
+    "crisis_details": {
+      "covid_2020_detected": true,
+      "stagflation_2022_detected": true,
+      "rate_shock_2022_detected": true,
+      "jpy_carry_2024_detected": true,
+      "risk_on_bars": 102
+    }
+  }
+}

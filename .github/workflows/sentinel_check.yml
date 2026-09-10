@@ -1,12 +1,8 @@
 name: Ultimate Macro Sentinel Auto-Updater
 
 on:
-  # 1. OTOMATİK ÇALIŞMA (CRON)
   schedule:
-    # Her gün hafta içi (Pazartesi-Cuma) UTC saatiyle 21:00'da çalışır (Türkiye saatiyle gece 00:00)
-    - cron: '0 21 * * 1-5' 
-    
-  # 2. MANUEL ÇALIŞTIRMA (İstediğin zaman butona basabilmen için)
+    - cron: '0 21 * * 1-5'
   workflow_dispatch: 
 
 jobs:
@@ -24,7 +20,7 @@ jobs:
       - name: Gerekli Kütüphaneleri Yükle
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy yfinance pytz
+          pip install -r requirements.txt
 
       - name: Yapay Zeka Motorunu Çalıştır (main.py)
         env:
