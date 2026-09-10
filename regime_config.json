@@ -240,33 +240,33 @@
     }
   ],
   "calibrated_thresholds": {
-    "r1_oil_z": 1.3,
-    "r1_freight_z": -0.8,
-    "r1_hy_z": 0.4,
+    "r1_oil_z": 1.4,
+    "r1_freight_z": -0.9,
+    "r1_hy_z": 0.45,
     "r1_corr": 0.0,
-    "r2_dxy_z": 0.8,
-    "r2_jpy_z": -1.8,
-    "r2_vix_z": 1.3,
-    "r2_basket_z": -1.2,
-    "r3_tips_z": 1.3,
+    "r2_dxy_z": 1.0,
+    "r2_jpy_z": -1.9,
+    "r2_vix_z": 1.4,
+    "r2_basket_z": -1.4,
+    "r3_tips_z": 1.4,
     "r3_t10yie_z": 0.5,
-    "r4_hy_z": 1.8,
+    "r4_hy_z": 1.9,
     "r4_slope": 0.0,
-    "r4_ig_z": 0.8,
-    "r5_hy_z": -0.4,
-    "r5_dxy_min": -1.2,
-    "r5_dxy_max": 0.6,
-    "r5_vix_pct": 35.0,
+    "r4_ig_z": 0.9,
+    "r5_hy_z": -0.45,
+    "r5_dxy_min": -1.1,
+    "r5_dxy_max": 0.55,
+    "r5_vix_pct": 32.0,
     "r5_ndl_z": 0.0
   },
   "backtest_metrics": {
     "strategy": {
-      "annualized_return": 5.33,
-      "annualized_volatility": 5.77,
-      "sharpe_ratio": 0.26,
-      "max_drawdown": 13.55,
-      "calmar_ratio": 0.39,
-      "total_return": 59.36
+      "annualized_return": 4.46,
+      "annualized_volatility": 5.43,
+      "sharpe_ratio": 0.11,
+      "max_drawdown": 15.78,
+      "calmar_ratio": 0.28,
+      "total_return": 47.9
     },
     "benchmark_60_40": {
       "annualized_return": -1.62,
@@ -285,12 +285,12 @@
       "total_return": -33.57
     },
     "regime_distribution": {
-      "REJIMSIZ_GECIS": 37.4,
-      "Reel Faiz Şoku": 25.4,
-      "Sistemik Likidite Şoku & Carry Çöküşü": 16.0,
-      "Kredi Temerrüt Baskısı": 13.7,
-      "Küresel Likidite Rallisi (Risk-On)": 4.5,
-      "Küresel Enflasyon & Stagflasyon Şoku": 3.0
+      "Reel Faiz Şoku": 48.3,
+      "REJIMSIZ_GECIS": 28.6,
+      "Kredi Temerrüt Baskısı": 10.3,
+      "Sistemik Likidite Şoku & Carry Çöküşü": 7.3,
+      "Küresel Enflasyon & Stagflasyon Şoku": 3.1,
+      "Küresel Likidite Rallisi (Risk-On)": 2.5
     },
     "crisis_recall_pct": 100.0,
     "crisis_details": {
@@ -298,7 +298,7 @@
       "stagflation_2022_detected": true,
       "rate_shock_2022_detected": true,
       "jpy_carry_2024_detected": true,
-      "risk_on_bars": 102
+      "risk_on_bars": 56
     }
   }
 }

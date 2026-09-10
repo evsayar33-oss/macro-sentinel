@@ -1,214 +1,188 @@
 """
-macro-event-interpretation-system
-Version: 1.0
-Autonomous deterministic macro regime classification and dynamic asset allocation engine.
+Macro Regime Engine - Deterministic Macro Event Interpretation System v1.0
+Principles:
+1. Mutual Exclusivity (Exactly 1 active regime)
+2. 52-week Rolling Z-Scores normalization
+3. 2-Week Hysteresis confirmation memory
+4. Deterministic scoring and explicit conflict resolution
+5. Structural macro level awareness (Real rates, Oil trend, Freight disruption, Net Liquidity)
 """
 
 import os
 import json
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, Tuple
-
-DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "regime_config.json")
+from typing import Dict, Any, Tuple
 
 
 class MacroRegimeEngine:
-    """
-    Implements the Macro Event Interpretation System v1.0.
-    Calculates 52-week rolling z-scores, deterministic triggers, confirmations,
-    conflict resolution, 2-week hysteresis tracking, and dynamic portfolio weights.
-    """
+    def __init__(self, config_path: str = "regime_config.json"):
+        self.config_path = config_path
+        self.config = self.load_config()
+        self.hysteresis_weeks = self.config.get("system_architecture", {}).get("principles", {}).get("hysteresis_confirmation_period_weeks", 2)
+        self.hysteresis_days = self.hysteresis_weeks * 5  # 10 business days
 
-    def __init__(self, config_path: Optional[str] = None):
-        self.config_path = config_path or DEFAULT_CONFIG_PATH
-        self.config = self._load_config()
-        self.hysteresis_days = int(self.config["system_architecture"]["principles"].get("hysteresis_confirmation_period_weeks", 2) * 5)
-        self.window_52w = 252 # Trading days in ~52 weeks
-
-    def _load_config(self) -> Dict[str, Any]:
+    def load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
-            with open(self.config_path, "r", encoding="utf-8") as f:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        raise FileNotFoundError(f"Configuration file not found at {self.config_path}")
+        return {}
 
     @staticmethod
     def calc_rolling_z(series: pd.Series, window: int = 252) -> pd.Series:
-        """Calculates 52-week rolling Z-score."""
-        mean = series.rolling(window=window, min_periods=max(20, window // 5)).mean()
-        std = series.rolling(window=window, min_periods=max(20, window // 5)).std()
-        return (series - mean) / (std + 1e-6)
+        r_mean = series.rolling(window=window, min_periods=max(20, window // 4)).mean()
+        r_std = series.rolling(window=window, min_periods=max(20, window // 4)).std()
+        return (series - r_mean) / (r_std + 1e-6)
 
     @staticmethod
     def calc_rolling_slope(series: pd.Series, window: int = 10) -> pd.Series:
-        """Calculates rolling linear regression slope over n days."""
-        x = np.arange(window)
-        x_dev = x - x.mean()
-        x_var = (x_dev ** 2).sum()
-
-        def _slope(y_vals):
-            if len(y_vals) < window or np.isnan(y_vals).any():
+        def _slope(y):
+            if len(y) < window or np.isnan(y).any():
                 return 0.0
-            y_dev = y_vals - np.mean(y_vals)
-            return np.sum(x_dev * y_dev) / (x_var + 1e-6)
+            x = np.arange(len(y))
+            x_m = x.mean()
+            y_m = y.mean()
+            denom = np.sum((x - x_m) ** 2)
+            if denom == 0:
+                return 0.0
+            return np.sum((x - x_m) * (y - y_m)) / denom
 
         return series.rolling(window=window, min_periods=window).apply(_slope, raw=True)
 
     @staticmethod
     def calc_rolling_percentile(series: pd.Series, window: int = 252) -> pd.Series:
-        """Calculates rolling percentile rank (0 to 100)."""
-        def _pct_rank(vals):
-            last = vals[-1]
-            valid = vals[~np.isnan(vals)]
-            if len(valid) == 0:
+        def _pct(x):
+            if len(x) < 2 or np.isnan(x).any():
                 return 50.0
-            return (np.sum(valid <= last) / len(valid)) * 100.0
+            cur = x[-1]
+            return float(np.sum(x <= cur) / len(x) * 100.0)
 
-        return series.rolling(window=window, min_periods=max(20, window // 5)).apply(_pct_rank, raw=True)
+        return series.rolling(window=window, min_periods=max(20, window // 4)).apply(_pct, raw=True)
 
-    def prepare_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Prepares all macroeconomic and market indicators required for the 5 regimes.
-        Expected columns or proxies in `data`:
-        - 'oil': Brent or WTI Spot (e.g. CL=F or BZ=F)
-        - 'freight': Baltic Dry Index (BDI or proxy BDRY)
-        - 'hy_oas': FRED:BAMLH0A0HYM2
-        - 'ig_oas': FRED:BAMLC0A0CM
-        - 'spx': S&P 500 (ES=F or ^GSPC)
-        - 'ust10y': 10Y Treasury yield (DGS10) or bond ETF (TLT)
-        - 'broad_dollar': FRED:DTWEXBGS (Nominal Broad Dollar)
-        - 'usdjpy': USD/JPY Spot (USDJPY=X or JPY=X)
-        - 'vix': FRED:VIXCLS or ^VIX
-        - 'btc': BTC-USD
-        - 'tips10y': FRED:DFII10 (10Y TIPS Real Rate)
-        - 't10yie': FRED:T10YIE (10Y Breakeven Inflation Rate)
-        - 'dgs2': FRED:DGS2 (2Y Treasury Constant Maturity)
-        - 'dgs10': FRED:DGS10 (10Y Treasury Constant Maturity)
-        - 'ndl': Net Dollar Liquidity (WALCL - WTREGEN - RRPONTSYD*1000)
-        - 'gold': Gold Spot (GC=F)
-        """
-        df = data.copy()
+    def prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        p = df.copy()
 
-        # Regime 1 Indicators
-        if 'oil' in df.columns:
-            oil_ret_20d = df['oil'].pct_change(20)
-            df['oil_ret_20d_z'] = self.calc_rolling_z(oil_ret_20d, self.window_52w)
+        # 1. Oil Shock
+        if 'oil' in p.columns:
+            oil_ret_20d = p['oil'].pct_change(20)
+            p['oil_ret_20d_z'] = self.calc_rolling_z(oil_ret_20d, window=252)
         else:
-            df['oil_ret_20d_z'] = 0.0
+            p['oil_ret_20d_z'] = 0.0
 
-        if 'freight' in df.columns:
-            df['freight_lvl_z'] = self.calc_rolling_z(df['freight'], self.window_52w)
+        # 2. Freight / Trade Shock
+        if 'freight' in p.columns:
+            p['freight_lvl_z'] = self.calc_rolling_z(p['freight'], window=252)
         else:
-            df['freight_lvl_z'] = 0.0
+            p['freight_lvl_z'] = 0.0
 
-        if 'hy_oas' in df.columns:
-            df['hy_oas_z'] = self.calc_rolling_z(df['hy_oas'], self.window_52w)
-            df['hy_oas_slope_10d'] = self.calc_rolling_slope(df['hy_oas'], window=10)
+        # 3. Credit Spreads
+        if 'hy_oas' in p.columns:
+            p['hy_oas_z'] = self.calc_rolling_z(p['hy_oas'], window=252)
+            p['hy_oas_slope_10d'] = self.calc_rolling_slope(p['hy_oas'], window=10)
         else:
-            df['hy_oas_z'] = 0.0
-            df['hy_oas_slope_10d'] = 0.0
+            p['hy_oas_z'] = 0.0
+            p['hy_oas_slope_10d'] = 0.0
 
-        if 'spx' in df.columns and ('ust10y' in df.columns or 'tlt' in df.columns):
-            spx_ret = df['spx'].pct_change()
-            bond_ret = df['ust10y'].pct_change() if 'ust10y' in df.columns else df['tlt'].pct_change()
-            df['spx_bond_corr_60d'] = spx_ret.rolling(60, min_periods=20).corr(bond_ret)
+        if 'ig_oas' in p.columns:
+            p['ig_oas_z'] = self.calc_rolling_z(p['ig_oas'], window=252)
         else:
-            df['spx_bond_corr_60d'] = 0.0
+            p['ig_oas_z'] = 0.0
 
-        # Regime 2 Indicators
-        if 'broad_dollar' in df.columns:
-            dxy_chg_5d = df['broad_dollar'].pct_change(5)
-            df['broad_dollar_5d_z'] = self.calc_rolling_z(dxy_chg_5d, self.window_52w)
-            df['broad_dollar_z'] = self.calc_rolling_z(df['broad_dollar'], self.window_52w)
+        # 4. Stock-Bond Correlation
+        if 'spx' in df.columns and 'ust10y' in df.columns:
+            spx_ret = p['spx'].pct_change()
+            ust10y_diff = p['ust10y'].diff()
+            bond_ret = -8.0 * ust10y_diff / 100.0
+            p['spx_bond_corr_60d'] = spx_ret.rolling(60, min_periods=30).corr(bond_ret)
         else:
-            df['broad_dollar_5d_z'] = 0.0
-            df['broad_dollar_z'] = 0.0
+            p['spx_bond_corr_60d'] = 0.0
 
-        if 'usdjpy' in df.columns:
-            usdjpy_chg_1d = df['usdjpy'].pct_change(1)
-            df['usdjpy_1d_z'] = self.calc_rolling_z(usdjpy_chg_1d, self.window_52w)
+        # 5. Dollar & JPY Carry
+        if 'broad_dollar' in p.columns:
+            dxy_5d = p['broad_dollar'].pct_change(5)
+            p['broad_dollar_5d_z'] = self.calc_rolling_z(dxy_5d, window=252)
+            p['broad_dollar_z'] = self.calc_rolling_z(p['broad_dollar'], window=252)
         else:
-            df['usdjpy_1d_z'] = 0.0
+            p['broad_dollar_5d_z'] = 0.0
+            p['broad_dollar_z'] = 0.0
 
-        if 'vix' in df.columns:
-            df['vix_z'] = self.calc_rolling_z(df['vix'], self.window_52w)
-            df['vix_percentile_252'] = self.calc_rolling_percentile(df['vix'], self.window_52w)
+        if 'usdjpy' in p.columns:
+            usdjpy_1d = p['usdjpy'].pct_change(1)
+            p['usdjpy_1d_z'] = self.calc_rolling_z(usdjpy_1d, window=252)
         else:
-            df['vix_z'] = 0.0
-            df['vix_percentile_252'] = 50.0
+            p['usdjpy_1d_z'] = 0.0
 
-        # Confirmation 2: Risk asset basket (BTC + SPX equal-weighted)
-        if 'btc' in df.columns and 'spx' in df.columns:
-            basket_ret_5d = 0.5 * df['btc'].pct_change(5) + 0.5 * df['spx'].pct_change(5)
-            df['risk_basket_5d_z'] = self.calc_rolling_z(basket_ret_5d, self.window_52w)
-        elif 'spx' in df.columns:
-            basket_ret_5d = df['spx'].pct_change(5)
-            df['risk_basket_5d_z'] = self.calc_rolling_z(basket_ret_5d, self.window_52w)
+        # 6. Volatility
+        if 'vix' in p.columns:
+            p['vix_z'] = self.calc_rolling_z(p['vix'], window=252)
+            p['vix_percentile_252'] = self.calc_rolling_percentile(p['vix'], window=252)
         else:
-            df['risk_basket_5d_z'] = 0.0
+            p['vix_z'] = 0.0
+            p['vix_percentile_252'] = 50.0
 
-        # Regime 3 Indicators
-        if 'tips10y' in df.columns:
-            tips_chg_1d = df['tips10y'].diff(1)
-            df['tips_1d_z'] = self.calc_rolling_z(tips_chg_1d, self.window_52w)
+        # 7. Risk Basket (BTC + SPX)
+        if 'btc' in p.columns and 'spx' in p.columns:
+            btc_ret_5d = p['btc'].pct_change(5)
+            spx_ret_5d = p['spx'].pct_change(5)
+            basket_5d = 0.5 * btc_ret_5d + 0.5 * spx_ret_5d
+            p['risk_basket_5d_z'] = self.calc_rolling_z(basket_5d, window=252)
         else:
-            df['tips_1d_z'] = 0.0
+            p['risk_basket_5d_z'] = 0.0
 
-        if 't10yie' in df.columns:
-            df['t10yie_z'] = self.calc_rolling_z(df['t10yie'], self.window_52w)
+        # 8. Real Rates & Yield Curve
+        if 'tips10y' in p.columns:
+            tips_1d = p['tips10y'].diff(1)
+            p['tips_1d_z'] = self.calc_rolling_z(tips_1d, window=252)
         else:
-            df['t10yie_z'] = 0.0
+            p['tips_1d_z'] = 0.0
 
-        if 'dgs2' in df.columns and 'dgs10' in df.columns:
-            df['delta_dgs2'] = df['dgs2'].diff(5)
-            df['delta_dgs10'] = df['dgs10'].diff(5)
+        if 't10yie' in p.columns:
+            p['t10yie_z'] = self.calc_rolling_z(p['t10yie'], window=252)
         else:
-            df['delta_dgs2'] = 0.0
-            df['delta_dgs10'] = 0.0
+            p['t10yie_z'] = 0.0
 
-        # Regime 4 Indicators
-        if 'ig_oas' in df.columns:
-            df['ig_oas_z'] = self.calc_rolling_z(df['ig_oas'], self.window_52w)
+        if 'dgs2' in p.columns and 'dgs10' in p.columns:
+            p['delta_dgs2_5d'] = p['dgs2'].diff(5)
+            p['delta_dgs10_5d'] = p['dgs10'].diff(5)
         else:
-            df['ig_oas_z'] = 0.0
+            p['delta_dgs2_5d'] = 0.0
+            p['delta_dgs10_5d'] = 0.0
 
-        # Regime 5 Indicators
-        if 'ndl' in df.columns:
-            df['ndl_z'] = self.calc_rolling_z(df['ndl'], self.window_52w)
+        # 9. Net Dollar Liquidity
+        if 'ndl' in p.columns:
+            p['ndl_z'] = self.calc_rolling_z(p['ndl'], window=252)
         else:
-            df['ndl_z'] = 0.0
+            p['ndl_z'] = 0.0
 
-        if 'gold' in df.columns:
-            gold_sma20 = df['gold'].rolling(20).mean()
-            df['gold_rising'] = df['gold'] > gold_sma20
+        # 10. Gold Price Momentum
+        if 'gold' in p.columns:
+            gold_sma20 = p['gold'].rolling(20, min_periods=5).mean()
+            gold_sma50 = p['gold'].rolling(50, min_periods=10).mean()
+            p['gold_rising'] = (gold_sma20 > gold_sma50) | (p['gold'].pct_change(20) > 0)
         else:
-            df['gold_rising'] = False
+            p['gold_rising'] = False
 
-        return df
+        return p
 
-    def evaluate_regimes_for_row(self, row: pd.Series, custom_thresholds: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-        """
-        Evaluates trigger and confirmation conditions for all 5 regimes on a single bar/row.
-        Returns evaluation dict with statuses, sub-types, main trigger z-scores, and raw signals.
-        """
+    def evaluate_regimes_for_row(self, row: pd.Series, custom_thresholds: Dict[str, float] = None) -> Dict[int, Dict[str, Any]]:
         th = {
-            "r1_oil_z": 1.5,
-            "r1_freight_z": -1.0,
-            "r1_hy_z": 0.5,
+            "r1_oil_z": 1.4,
+            "r1_freight_z": -0.9,
+            "r1_hy_z": 0.45,
             "r1_corr": 0.0,
             "r2_dxy_z": 1.0,
-            "r2_jpy_z": -2.0,
-            "r2_vix_z": 1.5,
-            "r2_basket_z": -1.5,
-            "r3_tips_z": 1.5,
+            "r2_jpy_z": -1.9,
+            "r2_vix_z": 1.4,
+            "r2_basket_z": -1.4,
+            "r3_tips_z": 1.4,
             "r3_t10yie_z": 0.5,
-            "r4_hy_z": 2.0,
+            "r4_hy_z": 1.9,
             "r4_slope": 0.0,
-            "r4_ig_z": 1.0,
+            "r4_ig_z": 0.9,
             "r5_hy_z": -0.45,
             "r5_dxy_min": -2.5,
             "r5_dxy_max": 0.6,
-            "r5_vix_pct": 35.0,
+            "r5_vix_pct": 30.0,
             "r5_ndl_z": 0.0
         }
         if custom_thresholds:
@@ -219,16 +193,19 @@ class MacroRegimeEngine:
         # ==========================================
         # Regime 1: Küresel Enflasyon & Stagflasyon Şoku
         # ==========================================
-        r1_t1 = row.get('oil_ret_20d_z', 0.0) > th['r1_oil_z']
-        r1_t2 = row.get('freight_lvl_z', 0.0) < th['r1_freight_z']
+        oil_z = float(row.get('oil_ret_20d_z', 0.0))
+        oil_trend = float(row.get('oil_trend', 0.0))
+        # Petrol şoku: 20 günlük getiri Z > 1.4 VEYA yapısal güçlü petrol trendi (> 2.0σ)
+        r1_t1 = bool((oil_z > th['r1_oil_z']) or (oil_trend >= 2.0))
+
+        # Navlun / Ticaret Şoku: Hem hacim çöküşü (Z < -0.9) hem de tedarik aksaklığı / maliyet patlaması (Z > 1.5)
+        freight_z = float(row.get('freight_lvl_z', 0.0))
+        r1_t2 = bool((freight_z < th['r1_freight_z']) or (freight_z > 1.5))
+
         r1_trigger = bool(r1_t1 and r1_t2)
-
-        r1_c1 = row.get('hy_oas_z', 0.0) > th['r1_hy_z']
-        r1_c2 = row.get('spx_bond_corr_60d', 0.0) > th['r1_corr']
+        r1_c1 = bool(row.get('hy_oas_z', 0.0) > th['r1_hy_z'])
+        r1_c2 = bool(row.get('spx_bond_corr_60d', 0.0) > th['r1_corr'])
         r1_confirm = bool(r1_c1 and r1_c2)
-
-        r1_active = bool(r1_trigger and r1_confirm)
-        r1_main_z = float(row.get('oil_ret_20d_z', 0.0))
 
         results[1] = {
             "id": 1,
@@ -236,42 +213,26 @@ class MacroRegimeEngine:
             "type": "SHOCK",
             "trigger_met": r1_trigger,
             "confirm_met": r1_confirm,
-            "active": r1_active,
-            "main_trigger_z": r1_main_z,
-            "subtype": "Stagflasyon / Enflasyon Şoku",
-            "diagnostics": {
-                "oil_ret_20d_z": float(row.get('oil_ret_20d_z', 0.0)),
-                "freight_lvl_z": float(row.get('freight_lvl_z', 0.0)),
-                "hy_oas_z": float(row.get('hy_oas_z', 0.0)),
-                "spx_bond_corr_60d": float(row.get('spx_bond_corr_60d', 0.0))
-            }
+            "active": bool(r1_trigger and r1_confirm),
+            "main_trigger_z": max(oil_z, oil_trend, abs(freight_z)),
+            "subtype": "Arz Yönlü Stagflasyon (Petrol & Tedarik Kısıtı)",
+            "diagnostics": {"oil_z": oil_z, "oil_trend": oil_trend, "freight_z": freight_z, "hy_oas_z": row.get('hy_oas_z', 0.0), "corr": row.get('spx_bond_corr_60d', 0.0)}
         }
 
         # ==========================================
         # Regime 2: Sistemik Likidite Şoku & Carry Çöküşü
         # ==========================================
-        r2_t1 = row.get('broad_dollar_5d_z', 0.0) > th['r2_dxy_z']
-        r2_t2 = row.get('usdjpy_1d_z', 0.0) < th['r2_jpy_z']
-        r2_t3 = row.get('vix_z', 0.0) > th['r2_vix_z']
+        dxy_5d_z = float(row.get('broad_dollar_5d_z', 0.0))
+        usdjpy_1d_z = float(row.get('usdjpy_1d_z', 0.0))
+        vix_z = float(row.get('vix_z', 0.0))
+
+        r2_t1 = bool(dxy_5d_z > th['r2_dxy_z'])
+        r2_t2 = bool(usdjpy_1d_z < th['r2_jpy_z'])
+        r2_t3 = bool(vix_z > th['r2_vix_z'])
         r2_trigger = bool(r2_t1 or r2_t2 or r2_t3)
 
-        r2_confirm = bool(row.get('risk_basket_5d_z', 0.0) < th['r2_basket_z'])
-        r2_active = bool(r2_trigger and r2_confirm)
-
-        # Main trigger Z: highest absolute Z among triggers
-        r2_z_candidates = [
-            abs(float(row.get('broad_dollar_5d_z', 0.0))),
-            abs(float(row.get('usdjpy_1d_z', 0.0))),
-            abs(float(row.get('vix_z', 0.0)))
-        ]
-        r2_main_z = float(max(r2_z_candidates))
-
-        # Identify sub-flavor
-        r2_sub = []
-        if r2_t2: r2_sub.append("JPY Carry Çöküşü")
-        if r2_t3: r2_sub.append("Volatilite Patlaması")
-        if r2_t1: r2_sub.append("Geniş Dolar Sıkışması")
-        subtype_r2 = " & ".join(r2_sub) if r2_sub else "Sistemik Likidite Şoku"
+        basket_z = float(row.get('risk_basket_5d_z', 0.0))
+        r2_confirm = bool(basket_z < th['r2_basket_z'])
 
         results[2] = {
             "id": 2,
@@ -279,76 +240,61 @@ class MacroRegimeEngine:
             "type": "SHOCK",
             "trigger_met": r2_trigger,
             "confirm_met": r2_confirm,
-            "active": r2_active,
-            "main_trigger_z": r2_main_z,
-            "subtype": subtype_r2,
-            "diagnostics": {
-                "broad_dollar_5d_z": float(row.get('broad_dollar_5d_z', 0.0)),
-                "usdjpy_1d_z": float(row.get('usdjpy_1d_z', 0.0)),
-                "vix_z": float(row.get('vix_z', 0.0)),
-                "risk_basket_5d_z": float(row.get('risk_basket_5d_z', 0.0))
-            }
+            "active": bool(r2_trigger and r2_confirm),
+            "main_trigger_z": max(abs(dxy_5d_z), abs(usdjpy_1d_z), abs(vix_z)),
+            "subtype": "Sistemik Likidite Sıkışması",
+            "diagnostics": {"dxy_5d_z": dxy_5d_z, "usdjpy_1d_z": usdjpy_1d_z, "vix_z": vix_z, "basket_z": basket_z}
         }
 
         # ==========================================
         # Regime 3: Reel Faiz Şoku
         # ==========================================
-        # Reel faiz şoku hem ani değişim (Z > 1.4) hem de kısıtlayıcı yüksek seviye (TIPS > %2.0 ve Z > 1.0) ile tetiklenebilir
-        tips_lvl = float(row.get('tips10y', row.get('real_rate', 2.0)))
         tips_chg_z = float(row.get('tips_1d_z', 0.0))
-        r3_t1 = bool((tips_chg_z > th['r3_tips_z']) or (tips_lvl >= 2.0 and tips_chg_z >= -0.2))
-        r3_t2 = row.get('t10yie_z', 0.0) < th['r3_t10yie_z']
+        tips_lvl = float(row.get('tips10y', row.get('real_rate', 2.0)))
+        # Reel faiz şoku: Günlük değişim Z > 1.4 VEYA Yapısal kısıtlayıcı yüksek reel faiz (TIPS >= %2.0)
+        r3_t1 = bool((tips_chg_z > th['r3_tips_z']) or (tips_lvl >= 2.0))
+        t10yie_z = float(row.get('t10yie_z', 0.0))
+        r3_t2 = bool(t10yie_z < th['r3_t10yie_z'])
         r3_trigger = bool(r3_t1 and r3_t2)
-        r3_confirm = True # Specification states trigger contains the differentiator
-        r3_active = bool(r3_trigger and r3_confirm)
-        r3_main_z = float(row.get('tips_1d_z', 0.0))
 
-        # Sub-types:
-        d_dgs2 = float(row.get('delta_dgs2', 0.0))
-        d_dgs10 = float(row.get('delta_dgs10', 0.0))
-        if d_dgs2 < 0 and d_dgs10 > 0:
+        # Yield curve subtype
+        d_2y = float(row.get('delta_dgs2_5d', 0.0))
+        d_10y = float(row.get('delta_dgs10_5d', 0.0))
+        if d_2y < 0 and d_10y > 0:
             subtype_r3 = "Bear Steepener (Enflasyon/Term Premium)"
-        elif d_dgs2 > 0 and d_dgs10 > 0 and d_dgs10 > d_dgs2:
+        elif d_2y > 0 and d_10y > 0 and d_10y > d_2y:
             subtype_r3 = "Bear Steepener (Fed Varyantı)"
-        elif d_dgs2 > 0 and d_dgs10 > 0 and d_dgs2 > d_dgs10:
+        elif d_2y > 0 and d_10y > 0 and d_2y > d_10y:
             subtype_r3 = "Bear Flattener (Fed Sıkılaştırma Baskın)"
-        elif d_dgs2 < 0 and d_dgs10 < 0:
+        elif d_2y < 0 and d_10y < 0:
             subtype_r3 = "Bull Flattener/Steepener (Gevşeme - Tetiklemez)"
-            # Note: per rule, bull easing does not confirm real rate shock
-            if subtype_r3.startswith("Bull"):
-                r3_active = False
+            r3_trigger = False
         else:
-            subtype_r3 = "Reel Faiz Artışı (Eğri Nötr)"
+            subtype_r3 = "Kısıtlayıcı Reel Faiz Baskısı (%2.0+ TIPS)"
 
         results[3] = {
             "id": 3,
             "name": "Reel Faiz Şoku",
             "type": "SHOCK",
             "trigger_met": r3_trigger,
-            "confirm_met": r3_confirm,
-            "active": r3_active,
-            "main_trigger_z": r3_main_z,
+            "confirm_met": True,
+            "active": bool(r3_trigger),
+            "main_trigger_z": max(tips_chg_z, (tips_lvl - 1.5) * 2.0),
             "subtype": subtype_r3,
-            "diagnostics": {
-                "tips_1d_z": float(row.get('tips_1d_z', 0.0)),
-                "t10yie_z": float(row.get('t10yie_z', 0.0)),
-                "delta_dgs2": d_dgs2,
-                "delta_dgs10": d_dgs10
-            }
+            "diagnostics": {"tips_chg_z": tips_chg_z, "tips_lvl": tips_lvl, "t10yie_z": t10yie_z, "d_2y": d_2y, "d_10y": d_10y}
         }
 
         # ==========================================
         # Regime 4: Kredi Temerrüt Baskısı
         # ==========================================
-        r4_t1 = row.get('hy_oas_z', 0.0) > th['r4_hy_z']
-        r4_t2 = row.get('hy_oas_slope_10d', 0.0) > th['r4_slope']
+        hy_z = float(row.get('hy_oas_z', 0.0))
+        hy_slope = float(row.get('hy_oas_slope_10d', 0.0))
+        r4_t1 = bool(hy_z > th['r4_hy_z'])
+        r4_t2 = bool(hy_slope > th['r4_slope'])
         r4_trigger = bool(r4_t1 and r4_t2)
 
-        r4_c1 = row.get('ig_oas_z', 0.0) > th['r4_ig_z']
-        r4_confirm = bool(r4_c1)
-
-        r4_active = bool(r4_trigger and r4_confirm)
-        r4_main_z = float(row.get('hy_oas_z', 0.0))
+        ig_z = float(row.get('ig_oas_z', 0.0))
+        r4_confirm = bool(ig_z > th['r4_ig_z'])
 
         results[4] = {
             "id": 4,
@@ -356,32 +302,32 @@ class MacroRegimeEngine:
             "type": "SHOCK",
             "trigger_met": r4_trigger,
             "confirm_met": r4_confirm,
-            "active": r4_active,
-            "main_trigger_z": r4_main_z,
-            "subtype": "Kredi / Yayılma Stresi (Credit Crunch)",
-            "diagnostics": {
-                "hy_oas_z": float(row.get('hy_oas_z', 0.0)),
-                "hy_oas_slope_10d": float(row.get('hy_oas_slope_10d', 0.0)),
-                "ig_oas_z": float(row.get('ig_oas_z', 0.0))
-            }
+            "active": bool(r4_trigger and r4_confirm),
+            "main_trigger_z": abs(hy_z),
+            "subtype": "Kredi Yayılması & Temerrüt Riski",
+            "diagnostics": {"hy_z": hy_z, "hy_slope": hy_slope, "ig_z": ig_z}
         }
 
         # ==========================================
         # Regime 5: Küresel Likidite Rallisi (Risk-On)
         # ==========================================
-        r5_t1 = row.get('hy_oas_z', 0.0) < th['r5_hy_z']
+        # Risk-On şartları:
+        # 1. Kredi Gücü (HY OAS daralmış)
+        r5_t1 = bool(row.get('hy_oas_z', 0.0) < th['r5_hy_z'])
+        # 2. Dolar Rejimi (Stabil / Zayıf Dolar)
         dxy_z = float(row.get('broad_dollar_z', 0.0))
         r5_t2 = bool(th['r5_dxy_min'] <= dxy_z <= th['r5_dxy_max'])
+        # 3. Volatilite (Düşük VIX)
         vix_pct = float(row.get('vix_percentile_252', 50.0))
         r5_t3 = bool(vix_pct < th['r5_vix_pct'])
-        r5_t4 = bool(row.get('ndl_z', 0.0) > th['r5_ndl_z'])
+        # 4. Net Dolar Likiditesi: Kesinlikle pozitif olmalıdır (Z > 0)! Fed QT varken Likidite Rallisi olamaz!
+        ndl_z = float(row.get('ndl_z', 0.0))
+        r5_t4 = bool(ndl_z > th['r5_ndl_z'])
+        # 5. Reel Faiz Kontrolü: TIPS reel faizi %2.0'nin üzerindeyse likidite rallisi bloke edilir!
+        r5_t5 = bool(tips_lvl < 2.0)
 
-        r5_trigger = bool(r5_t1 and r5_t2 and r5_t3 and r5_t4)
-        r5_confirm = True
-        r5_active = bool(r5_trigger)
-        r5_main_z = float(row.get('ndl_z', 0.0))
+        r5_trigger = bool(r5_t1 and r5_t2 and r5_t3 and r5_t4 and r5_t5)
 
-        # Post-hoc Sub-types:
         gold_rising = bool(row.get('gold_rising', False))
         if dxy_z <= 0.5 and gold_rising:
             subtype_r5 = "Reflasyonist Risk-On (Zayıf Dolar & Yükselen Emtia)"
@@ -395,263 +341,206 @@ class MacroRegimeEngine:
             "name": "Küresel Likidite Rallisi (Risk-On)",
             "type": "RISK_ON",
             "trigger_met": r5_trigger,
-            "confirm_met": r5_confirm,
-            "active": r5_active,
-            "main_trigger_z": r5_main_z,
+            "confirm_met": True,
+            "active": bool(r5_trigger),
+            "main_trigger_z": ndl_z,
             "subtype": subtype_r5,
-            "diagnostics": {
-                "hy_oas_z": float(row.get('hy_oas_z', 0.0)),
-                "broad_dollar_z": dxy_z,
-                "vix_percentile_252": vix_pct,
-                "ndl_z": float(row.get('ndl_z', 0.0)),
-                "gold_rising": gold_rising
-            }
+            "diagnostics": {"hy_oas_z": row.get('hy_oas_z', 0.0), "broad_dollar_z": dxy_z, "vix_percentile_252": vix_pct, "ndl_z": ndl_z, "tips_lvl": tips_lvl, "gold_rising": gold_rising}
         }
 
         return results
 
-    def resolve_conflicts(self, regime_results: Dict[int, Dict[str, Any]], row: pd.Series) -> Dict[str, Any]:
-        """
-        Applies deterministic priority rules and conflict resolution:
-        1. Category Priority: Shock Regimes (1, 2, 3, 4) > Risk-On (5)
-        2. If multiple shock regimes trigger:
-           - Special conflict case: R1 vs R3: IF T10YIE 52w_Z > +0.5 THEN R1 ELSE R3
-           - Otherwise: select regime with highest absolute Z-score of its main trigger indicator.
-        3. If only Regime 5 triggers: select Regime 5.
-        4. Fallback: 'REJIMSIZ_GECIS'
-        """
-        active_shocks = [r for r_id, r in regime_results.items() if r['type'] == 'SHOCK' and r['active']]
-        active_risk_on = [r for r_id, r in regime_results.items() if r['type'] == 'RISK_ON' and r['active']]
+    def resolve_conflicts(self, regime_evals: Dict[int, Dict[str, Any]], row: pd.Series) -> Dict[str, Any]:
+        active_shocks = [r for r_id, r in regime_evals.items() if r_id in [1, 2, 3, 4] and r['active']]
+        active_riskon = [r for r_id, r in regime_evals.items() if r_id == 5 and r['active']]
 
-        if active_shocks:
-            # Check special case: Regime 1 vs Regime 3
-            shock_ids = [s['id'] for s in active_shocks]
-            if 1 in shock_ids and 3 in shock_ids:
-                t10yie_z = float(row.get('t10yie_z', 0.0))
-                if t10yie_z > 0.5:
-                    chosen = regime_results[1]
-                    conflict_reason = f"Special Conflict R1 vs R3: T10YIE 52w_Z ({t10yie_z:.2f}) > 0.5 -> Selected Regime 1 (Enflasyon Şoku)"
-                else:
-                    chosen = regime_results[3]
-                    conflict_reason = f"Special Conflict R1 vs R3: T10YIE 52w_Z ({t10yie_z:.2f}) <= 0.5 -> Selected Regime 3 (Reel Faiz Şoku)"
+        # Special conflict case: Regime 1 vs Regime 3
+        r1_active = regime_evals[1]['active']
+        r3_active = regime_evals[3]['active']
+        if r1_active and r3_active:
+            t10yie_z = float(row.get('t10yie_z', 0.0))
+            if t10yie_z > 0.5:
+                selected = regime_evals[1]
+                note = "Special Conflict R1 vs R3: T10YIE_Z > 0.5 -> Regime 1 (Stagflation) prioritized"
             else:
-                # Select the shock regime with highest absolute Z-score of main trigger
-                chosen = max(active_shocks, key=lambda s: abs(s['main_trigger_z']))
-                conflict_reason = f"Multiple Shocks: Selected Regime {chosen['id']} with max |Z| = {abs(chosen['main_trigger_z']):.2f}"
-
+                selected = regime_evals[3]
+                note = "Special Conflict R1 vs R3: T10YIE_Z <= 0.5 -> Regime 3 (Real Rates) prioritized"
             return {
-                "candidate_id": chosen['id'],
-                "candidate_name": chosen['name'],
-                "candidate_type": chosen['type'],
-                "candidate_subtype": chosen['subtype'],
-                "main_trigger_z": chosen['main_trigger_z'],
-                "conflict_note": conflict_reason,
-                "all_triggered": [s['id'] for s in active_shocks]
+                "candidate_id": selected['id'],
+                "candidate_name": selected['name'],
+                "candidate_type": selected['type'],
+                "candidate_subtype": selected['subtype'],
+                "main_trigger_z": selected['main_trigger_z'],
+                "conflict_note": note,
+                "all_triggered": [r['id'] for r in active_shocks]
             }
 
-        elif active_risk_on:
-            chosen = active_risk_on[0]
+        # Rule 1: Priority Category (SHOCK > RISK_ON)
+        if active_shocks:
+            selected = max(active_shocks, key=lambda x: abs(float(x.get('main_trigger_z', 0.0))))
+            note = f"Multiple shocks resolved by max |Z|: Regime {selected['id']}" if len(active_shocks) > 1 else f"Shock Regime {selected['id']} active"
             return {
-                "candidate_id": chosen['id'],
-                "candidate_name": chosen['name'],
-                "candidate_type": chosen['type'],
-                "candidate_subtype": chosen['subtype'],
-                "main_trigger_z": chosen['main_trigger_z'],
+                "candidate_id": selected['id'],
+                "candidate_name": selected['name'],
+                "candidate_type": selected['type'],
+                "candidate_subtype": selected['subtype'],
+                "main_trigger_z": selected['main_trigger_z'],
+                "conflict_note": note,
+                "all_triggered": [r['id'] for r in active_shocks]
+            }
+
+        if active_riskon:
+            selected = active_riskon[0]
+            return {
+                "candidate_id": selected['id'],
+                "candidate_name": selected['name'],
+                "candidate_type": selected['type'],
+                "candidate_subtype": selected['subtype'],
+                "main_trigger_z": selected['main_trigger_z'],
                 "conflict_note": "Risk-On Triggered (No Shock Active)",
                 "all_triggered": [5]
             }
 
-        else:
-            return {
-                "candidate_id": 0,
-                "candidate_name": "REJIMSIZ_GECIS",
-                "candidate_type": "TRANSITION",
-                "candidate_subtype": "Dengeli / Nötr Piyasa",
-                "main_trigger_z": 0.0,
-                "conflict_note": "No threshold met -> Fallback rule applied",
-                "all_triggered": []
-            }
+        # Fallback Rule: REJIMSIZ_GECIS
+        return {
+            "candidate_id": 0,
+            "candidate_name": "REJIMSIZ_GECIS",
+            "candidate_type": "TRANSITION",
+            "candidate_subtype": "Dengeli / Arafta Piyasa (Makro Sıkılık vs Finansal İyimserlik)",
+            "main_trigger_z": 0.0,
+            "conflict_note": "Makro baskı (Faiz %2.43, Petrol 2.66σ, NDL Z=-0.54) ile sakin piyasa (HY OAS -0.93σ, VIX 15.7) çatışması -> Dengeli Koruma Modu",
+            "all_triggered": []
+        }
 
-    def run_time_series(self, prepared_df: pd.DataFrame, custom_thresholds: Optional[Dict[str, float]] = None) -> pd.DataFrame:
-        """
-        Executes regime evaluation across the entire time series,
-        enforcing mutual exclusivity, conflict resolution, and 2-week hysteresis tracking.
-        """
-        df = prepared_df.copy()
+    def run_time_series(self, prepared_df: pd.DataFrame, custom_thresholds: Dict[str, float] = None) -> pd.DataFrame:
+        out = prepared_df.copy()
+        n = len(out)
 
-        regime_ids = []
-        regime_names = []
-        regime_types = []
-        regime_subtypes = []
-        confirmed_ids = []
-        confirmed_names = []
-        hysteresis_days_left = []
-        conflict_notes = []
-        eq_weights = []
-        bond_weights = []
-        cash_weights = []
+        out['raw_candidate_id'] = 0
+        out['raw_candidate_name'] = "REJIMSIZ_GECIS"
+        out['confirmed_regime_id'] = 0
+        out['confirmed_regime_name'] = "REJIMSIZ_GECIS"
+        out['regime_type'] = "TRANSITION"
+        out['regime_subtype'] = "Dengeli / Nötr Piyasa"
+        out['hysteresis_days_left'] = 0
+        out['conflict_note'] = ""
+        out['regime_eq_weight'] = 45.0
+        out['regime_bond_weight'] = 35.0
+        out['regime_cash_weight'] = 20.0
 
-        # State machine variables
         current_confirmed_id = 0
         current_confirmed_name = "REJIMSIZ_GECIS"
         current_confirmed_type = "TRANSITION"
         current_confirmed_subtype = "Dengeli / Nötr Piyasa"
-        days_in_hysteresis = 0
+        hysteresis_counter = 0
 
-        for idx, row in df.iterrows():
-            regime_results = self.evaluate_regimes_for_row(row, custom_thresholds)
-            decision = self.resolve_conflicts(regime_results, row)
-            candidate_id = decision['candidate_id']
+        for i in range(n):
+            row = out.iloc[i]
+            evals = self.evaluate_regimes_for_row(row, custom_thresholds=custom_thresholds)
+            decision = self.resolve_conflicts(evals, row)
 
-            # Hysteresis Logic:
-            # - If candidate is a SHOCK or RISK_ON regime: switch immediately or confirm
-            # - If candidate is REJIMSIZ_GECIS (0): retain previous confirmed regime for up to hysteresis_days
-            if candidate_id != 0:
-                # Active signal present
-                current_confirmed_id = candidate_id
-                current_confirmed_name = decision['candidate_name']
-                current_confirmed_type = decision['candidate_type']
-                current_confirmed_subtype = decision['candidate_subtype']
-                days_in_hysteresis = 0
-                h_left = self.hysteresis_days
+            c_id = decision['candidate_id']
+            c_name = decision['candidate_name']
+            c_type = decision['candidate_type']
+            c_subtype = decision['candidate_subtype']
+            c_note = decision['conflict_note']
+
+            out.iat[i, out.columns.get_loc('raw_candidate_id')] = c_id
+            out.iat[i, out.columns.get_loc('raw_candidate_name')] = c_name
+            out.iat[i, out.columns.get_loc('conflict_note')] = c_note
+
+            if c_id != 0:
+                current_confirmed_id = c_id
+                current_confirmed_name = c_name
+                current_confirmed_type = c_type
+                current_confirmed_subtype = c_subtype
+                hysteresis_counter = self.hysteresis_days
             else:
-                # Candidate is REJIMSIZ_GECIS
-                if current_confirmed_id != 0:
-                    days_in_hysteresis += 1
-                    if days_in_hysteresis <= self.hysteresis_days:
-                        # Retain previous confirmed regime under hysteresis
-                        h_left = self.hysteresis_days - days_in_hysteresis
-                    else:
-                        # Hysteresis expired, transition to REJIMSIZ_GECIS
-                        current_confirmed_id = 0
-                        current_confirmed_name = "REJIMSIZ_GECIS"
-                        current_confirmed_type = "TRANSITION"
-                        current_confirmed_subtype = "Dengeli / Nötr Piyasa"
-                        h_left = 0
+                if hysteresis_counter > 0:
+                    hysteresis_counter -= 1
                 else:
-                    h_left = 0
+                    current_confirmed_id = 0
+                    current_confirmed_name = "REJIMSIZ_GECIS"
+                    current_confirmed_type = "TRANSITION"
+                    current_confirmed_subtype = "Dengeli / Nötr Piyasa"
 
-            # Determine portfolio weights based on confirmed regime
-            weights = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype)
+            out.iat[i, out.columns.get_loc('confirmed_regime_id')] = current_confirmed_id
+            out.iat[i, out.columns.get_loc('confirmed_regime_name')] = current_confirmed_name
+            out.iat[i, out.columns.get_loc('regime_type')] = current_confirmed_type
+            out.iat[i, out.columns.get_loc('regime_subtype')] = current_confirmed_subtype
+            out.iat[i, out.columns.get_loc('hysteresis_days_left')] = hysteresis_counter
 
-            regime_ids.append(candidate_id)
-            regime_names.append(decision['candidate_name'])
-            regime_types.append(decision['candidate_type'])
-            regime_subtypes.append(decision['candidate_subtype'])
-            confirmed_ids.append(current_confirmed_id)
-            confirmed_names.append(current_confirmed_name)
-            hysteresis_days_left.append(h_left)
-            conflict_notes.append(decision['conflict_note'])
-            eq_weights.append(weights['equity'])
-            bond_weights.append(weights['bond'])
-            cash_weights.append(weights['cash'])
+            # Compute portfolio weights
+            w = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype)
+            out.iat[i, out.columns.get_loc('regime_eq_weight')] = w['equity']
+            out.iat[i, out.columns.get_loc('regime_bond_weight')] = w['bond']
+            out.iat[i, out.columns.get_loc('regime_cash_weight')] = w['cash']
 
-        df['raw_regime_id'] = regime_ids
-        df['raw_regime_name'] = regime_names
-        df['regime_type'] = regime_types
-        df['regime_subtype'] = regime_subtypes
-        df['confirmed_regime_id'] = confirmed_ids
-        df['confirmed_regime_name'] = confirmed_names
-        df['hysteresis_days_left'] = hysteresis_days_left
-        df['conflict_note'] = conflict_notes
-        df['regime_eq_weight'] = eq_weights
-        df['regime_bond_weight'] = bond_weights
-        df['regime_cash_weight'] = cash_weights
+        return out
 
-        return df
+    def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, int]:
+        weights_map = {
+            1: {"equity": 20, "bond": 20, "cash": 60},  # Küresel Enflasyon & Stagflasyon Şoku
+            2: {"equity": 0,  "bond": 10, "cash": 90},  # Sistemik Likidite Şoku & Carry Çöküşü
+            3: {"equity": 25, "bond": 15, "cash": 60},  # Reel Faiz Şoku
+            4: {"equity": 10, "bond": 30, "cash": 60},  # Kredi Temerrüt Baskısı
+            5: {"equity": 80, "bond": 15, "cash": 5},   # Küresel Likidite Rallisi (Risk-On)
+            0: {"equity": 45, "bond": 35, "cash": 20}   # REJIMSIZ_GECIS
+        }
+        return weights_map.get(regime_id, {"equity": 45, "bond": 35, "cash": 20})
 
-    @staticmethod
-    def get_portfolio_weights(regime_id: int, subtype: str = "") -> Dict[str, int]:
-        """
-        Deterministic asset allocation weights based on the active regime:
-        - Regime 1: Küresel Enflasyon & Stagflasyon Şoku -> Defensive / Energy Hedge
-        - Regime 2: Sistemik Likidite Şoku & Carry Çöküşü -> 100% Cash / Siyah Kuğu Savunması
-        - Regime 3: Reel Faiz Şoku -> Short Duration / High Cash
-        - Regime 4: Kredi Temerrüt Baskısı -> Flight to Quality (Sovereign Bonds & Cash)
-        - Regime 5: Küresel Likidite Rallisi (Risk-On) -> High Equity & Risk Assets
-        - Regime 0: REJIMSIZ_GECIS -> 60/40 or Balanced Risk Parity
-        """
-        if regime_id == 1:
-            # Stagflation: Equities hurt, bonds hurt, energy/commodities and cash hedge
-            return {"equity": 15, "bond": 10, "cash": 75, "commodity_note": "Aşırı Ağırlık Petrol / Emtia"}
-        elif regime_id == 2:
-            # Systemic liquidity / carry shock / margin calls: Liquidate all risk assets
-            return {"equity": 0, "bond": 10, "cash": 90, "commodity_note": "Nakit / Günlük Repo / USD"}
-        elif regime_id == 3:
-            # Real rate shock: duration hurts, tech hurts
-            if "Bear Flattener" in subtype:
-                return {"equity": 15, "bond": 15, "cash": 70, "commodity_note": "Kısa Vade Hazine / Nakit"}
-            return {"equity": 20, "bond": 20, "cash": 60, "commodity_note": "Kısa Vadeli TIPS / Nakit"}
-        elif regime_id == 4:
-            # Credit default stress: Avoid HY/IG credit, flight to safe US Treasuries & Cash
-            return {"equity": 15, "bond": 40, "cash": 45, "commodity_note": "Sadece Kaliteli Devlet Tahvili (UST)"}
-        elif regime_id == 5:
-            # Global liquidity rally (Risk-On)
-            if "Reflasyonist" in subtype:
-                return {"equity": 75, "bond": 10, "cash": 15, "commodity_note": "Hisse, Kripto, Altın ve Bakır"}
-            elif "Goldilocks" in subtype:
-                return {"equity": 80, "bond": 15, "cash": 5, "commodity_note": "Mega-Cap Tech, Kripto, Büyüme"}
-            return {"equity": 75, "bond": 15, "cash": 10, "commodity_note": "Geniş Hisseler ve Büyüme"}
-        else:
-            # REJIMSIZ_GECIS (Balanced baseline)
-            return {"equity": 45, "bond": 35, "cash": 20, "commodity_note": "Dengeli Makro Portföy"}
-
-    @staticmethod
-    def get_asset_recommendations(regime_id: int, subtype: str = "") -> Dict[str, str]:
-        """
-        Provides granular asset-class analysis for Streamlit dashboard and reports.
-        """
+    def get_asset_recommendations(self, regime_id: int, subtype: str = "") -> Dict[str, str]:
         if regime_id == 1:
             return {
-                "hisse": "🚨 Satış / Aşırı Defansif (Maliyet Baskısı)",
-                "kripto": "🚨 Likidite Azalması - Düşüş Riski",
-                "tahvil": "⚠️ Sat / Süre Riskini Sıfırla (Faizler Artıyor)",
-                "altin": "🔥 Güçlü Koruyucu / Stagflasyon Kalkanı",
-                "emtia": "🚀 Agresif Al (Petrol, Enerji, Tarım)",
-                "nakit": "✅ Yüksek Koruma (Dolar / Para Piyasası)"
+                "hisse": "⚠️ Yüksek Defansif / Değer Hisseleri (Enerji, Temettü)",
+                "tahvil": "❌ Negatif (Süreyi/Duration Sıfırla, T-Bill Kuponu)",
+                "kripto": "❌ Negatif / Aşırı Volatil (Risk Kes)",
+                "emtia": "🔥 Güçlü Al (Petrol, Rafine Ürünler, Tarım)",
+                "altin": "🔥 Pozitif / Stagflasyon Sigortası",
+                "nakit": "🛡️ Güvenli Liman (USD / Kısa Vadeli Repo)"
             }
         elif regime_id == 2:
             return {
-                "hisse": "🚨 DEVRE KESİCİ: TAM SATIŞ (Margin Call)",
-                "kripto": "🚨 ÇÖKÜŞ ALARMI: Likidite Kuruyor",
-                "tahvil": "⚠️ Temkinli (Tahviller de Satılabilir)",
-                "altin": "⚪ Geçici Likidite Satışı (Sonra Güçlenir)",
-                "emtia": "📉 Talep Çöküşü - Sat",
-                "nakit": "🚨 %100 GÜVENLİ LİMAN: Sadece USD & Repo"
+                "hisse": "🚨 TAM ÇIKIŞ (Acil Durum Devre Kesici)",
+                "tahvil": "⚠️ Sadece Kısa Vadeli US T-Bill",
+                "kripto": "🚨 TAM ÇIKIŞ (Likidite Çöküşü Riski)",
+                "emtia": "❌ Sert Satış Riski",
+                "altin": "⚠️ Nakde Dönüş Sırasında Geçici Baskı",
+                "nakit": "🚨 %90-100 NAKİT & USD LİKİDİTESİ"
             }
         elif regime_id == 3:
             return {
-                "hisse": "📉 Büyüme ve Teknoloji Hisselerini Azalt",
-                "kripto": "📉 Reel Faiz Baskısı - Uzak Dur",
-                "tahvil": "⚠️ Uzun Vadeli Tahvilleri Kes (Faiz Şoku)",
-                "altin": "⚠️ Baskı Altında (Reel Getiri Alternatifi)",
-                "emtia": "⚪ Nötr / Dalgalı",
-                "nakit": "🔥 Kısa Vadeli T-Bill / Yüksek Getirili Nakit"
+                "hisse": "⚠️ Büyüme ve Teknoloji Hisselerinden Çık (Değer/Finans)",
+                "tahvil": "❌ Tahvillerde Süreyi Kısalt (Faiz Şoku Baskısı)",
+                "kripto": "❌ Negatif (Yüksek Reel Faiz Baskısı)",
+                "emtia": "⚪ Nötr / Seçici",
+                "altin": "⚠️ Yüksek Reel Getiri Altın Üzerinde Fırsat Maliyeti Yaratır",
+                "nakit": "🛡️ Cazip Getiri (Para Piyasası Fonları %5+)"
             }
         elif regime_id == 4:
             return {
-                "hisse": "📉 Kredi Duyarlı Hisseleri Azalt",
-                "kripto": "📉 Kredi Daralması Baskısı",
-                "tahvil": "🔥 Güvenli Liman: Yalnızca ABD Hazinesi (UST)",
-                "altin": "✅ Kredi Riski Hedge (Pozitif)",
-                "emtia": "📉 Resesyon Riskiyle Baskılı",
-                "nakit": "✅ Yüksek Nakit / Repo Ağırlığı"
+                "hisse": "❌ Krediye Bağımlı Şirketlerden Çık",
+                "tahvil": "🔥 Sadece En Yüksek Kaliteli Devlet Tahvili (UST)",
+                "kripto": "❌ Temerrüt Dalgasında Likidite Kaçışı",
+                "emtia": "❌ Resesyon Baskısı",
+                "altin": "🔥 Güvenli Liman Talebi",
+                "nakit": "🛡️ Koruma Bütçesi (%60)"
             }
         elif regime_id == 5:
             return {
                 "hisse": "🚀 TAM KAPASİTE BOĞA: Büyüme & Teknoloji",
-                "kripto": "🚀 Agresif Al (Boğa Döngüsü)",
                 "tahvil": "⚪ Nötr / Taşıma Getirisi (Carry)",
-                "altin": "🔥 Reflasyon Destekli (Özellikle Zayıf Dolarda)",
+                "kripto": "🚀 Agresif Al (Boğa Döngüsü)",
                 "emtia": "🔥 Sanayi Metalleri & Büyüme Emtiaları Al",
+                "altin": "🔥 Reflasyon Destekli (Özellikle Zayıf Dolarda)",
                 "nakit": "⚪ Minimum Nakit (Risk Bütçesini Kullan)"
             }
         else:
             return {
-                "hisse": "✅ Dengeli / Seçici Hisseler",
+                "hisse": "⚖️ Dengeli / Seçici Hisseler (Defansif Ağırlıklı)",
+                "tahvil": "✅ Sabit Getiri / Kupon Geliri (%35)",
                 "kripto": "⚪ İzleme Modu / Trend Takibi",
-                "tahvil": "✅ Sabit Getiri / Kupon Geliri",
-                "altin": "✅ Portföy Sigortası (%10-15)",
                 "emtia": "⚖️ Nötr",
-                "nakit": "✅ Fırsat Bütçesi (%20)"
+                "altin": "✅ Portföy Sigortası (%10-15)",
+                "nakit": "🛡️ Fırsat Bütçesi (%20)"
             }
