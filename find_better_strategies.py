@@ -96,11 +96,9 @@ res_allweather = evaluate_ret_series(allweather_r, "🌐 All-Weather Plus (Ray D
 # 5. Mevcut Benchmarklar
 def_r = 0.35*cash_ret + 0.20*gold_ret + 0.20*bond_ret + 0.15*spx_ret + 0.05*oil_ret + 0.05*btc_ret
 art_r = 0.25*spx_ret + 0.25*cash_ret + 0.20*gold_ret + 0.15*bond_ret + 0.10*oil_ret + 0.05*btc_ret
-b60_r = 0.60*spx_ret + 0.40*bond_ret
 res_def = evaluate_ret_series(def_r, "🛡️ Benchmark 1: Defensive Shield")
 res_art = evaluate_ret_series(art_r, "🐉 Benchmark 2: Artemis Dragon")
-res_60 = evaluate_ret_series(b60_r, "📉 Statik 60/40")
 
-summary = pd.DataFrame([res_apex, res_current, res_def, res_art, res_allweather, res_taleb, res_60])
+summary = pd.DataFrame([res_apex, res_current, res_def, res_art, res_allweather, res_taleb])
 cols = ["Name", "Annual Return (%)", "Annual Vol (%)", "Sharpe Ratio", "Max Drawdown (%)", "Calmar Ratio", "Total Return (%)"]
 print(summary[cols].to_string(index=False))

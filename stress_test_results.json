@@ -1,16 +1,16 @@
 {
   "monte_carlo_10k": {
     "🏛️ Macro Sentinel Multi-Asset": {
-      "Median 1Y Return": 13.12,
-      "5th Percentile": 4.29,
-      "95th Percentile": 24.81,
+      "Median 1Y Return": 14.04,
+      "5th Percentile": 4.05,
+      "95th Percentile": 28.05,
       "VaR 95% (1Y)": 0.0,
       "VaR 99% (1Y)": 0.0,
-      "CVaR 95% (ES)": 1.31,
-      "CVaR 99% (ES)": 1.31,
-      "Ortalama Max DD": 2.35,
-      "99% Worst Max DD": 6.63,
-      "P(DD > 10%)": "%0.0",
+      "CVaR 95% (ES)": 1.56,
+      "CVaR 99% (ES)": 1.56,
+      "Ortalama Max DD": 2.49,
+      "99% Worst Max DD": 7.09,
+      "P(DD > 10%)": "%0.1",
       "P(DD > 20%)": "%0.0"
     },
     "🛡️ Defensive Shield": {
@@ -39,31 +39,18 @@
       "P(DD > 10%)": "%43.9",
       "P(DD > 20%)": "%5.7"
     },
-    "📉 Statik 60/40": {
-      "Median 1Y Return": -13.49,
-      "5th Percentile": -34.68,
-      "95th Percentile": 9.61,
-      "VaR 95% (1Y)": 34.68,
-      "VaR 99% (1Y)": 42.15,
-      "CVaR 95% (ES)": 39.48,
-      "CVaR 99% (ES)": 45.76,
-      "Ortalama Max DD": 21.3,
-      "99% Worst Max DD": 44.68,
-      "P(DD > 10%)": "%90.3",
-      "P(DD > 20%)": "%51.6"
-    },
     "📈 S&P 500 Buy & Hold": {
-      "Median 1Y Return": -11.29,
-      "5th Percentile": -40.12,
-      "95th Percentile": 23.0,
-      "VaR 95% (1Y)": 40.12,
-      "VaR 99% (1Y)": 49.34,
-      "CVaR 95% (ES)": 45.95,
-      "CVaR 99% (ES)": 53.7,
-      "Ortalama Max DD": 24.72,
-      "99% Worst Max DD": 52.64,
+      "Median 1Y Return": -11.21,
+      "5th Percentile": -39.41,
+      "95th Percentile": 23.17,
+      "VaR 95% (1Y)": 39.41,
+      "VaR 99% (1Y)": 48.51,
+      "CVaR 95% (ES)": 45.02,
+      "CVaR 99% (ES)": 53.06,
+      "Ortalama Max DD": 24.7,
+      "99% Worst Max DD": 51.85,
       "P(DD > 10%)": "%95.2",
-      "P(DD > 20%)": "%61.4"
+      "P(DD > 20%)": "%61.9"
     }
   },
   "sensitivity_top_calmar": [

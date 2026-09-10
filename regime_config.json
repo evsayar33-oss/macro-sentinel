@@ -350,16 +350,6 @@
       "calmar_ratio": 0.46,
       "total_return": 135.41
     },
-    "benchmark_60_40": {
-      "name": "📉 Eski Statik 60/40 (Referans)",
-      "allocation_desc": "%60 Hisse / %40 Tahvil (Dar Kapsam)",
-      "annualized_return": 5.9,
-      "annualized_volatility": 8.3,
-      "sharpe_ratio": 0.35,
-      "max_drawdown": 36.01,
-      "calmar_ratio": 0.16,
-      "total_return": 67.34
-    },
     "benchmark_spx": {
       "name": "📈 Benchmark S&P 500 Buy & Hold",
       "allocation_desc": "%100 SPX Buy & Hold",
@@ -396,14 +386,6 @@
         "crypto": 5
       },
       "description": "25% Hisse, 25% Nakit, 20% Altın, 15% Tahvil, 10% Emtia, 5% Kripto"
-    },
-    "classic_60_40": {
-      "name": "📉 Eski Statik 60/40 (Referans)",
-      "weights": {
-        "equity": 60,
-        "bond": 40
-      },
-      "description": "60% Hisse, 40% Tahvil"
     }
   }
 }
