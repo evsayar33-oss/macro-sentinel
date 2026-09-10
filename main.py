@@ -273,6 +273,9 @@ class UltimateSentinelEngine:
             'eq_weight': eq_weight,
             'bond_weight': bond_weight,
             'cash_weight': cash_weight,
+            'gold_weight': reg_weights.get('gold', 20.0),
+            'commodity_weight': reg_weights.get('commodity', 5.0),
+            'crypto_weight': reg_weights.get('crypto', 5.0),
             # YENİ ENTEGRASYON: 5 DETERMINISTIC MAKRO REJİM PARAMETRELERİ
             'regime_id': regime_id,
             'regime_name': regime_name,

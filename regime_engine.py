@@ -424,9 +424,12 @@ class MacroRegimeEngine:
         out['regime_subtype'] = "Dengeli / Nötr Piyasa"
         out['hysteresis_days_left'] = 0
         out['conflict_note'] = ""
-        out['regime_eq_weight'] = 20.0
-        out['regime_bond_weight'] = 35.0
-        out['regime_cash_weight'] = 45.0
+        out['regime_cash_weight'] = 35.0
+        out['regime_gold_weight'] = 20.0
+        out['regime_bond_weight'] = 20.0
+        out['regime_eq_weight'] = 15.0
+        out['regime_commodity_weight'] = 5.0
+        out['regime_crypto_weight'] = 5.0
 
         current_confirmed_id = 0
         current_confirmed_name = "REJIMSIZ_GECIS"
@@ -472,22 +475,33 @@ class MacroRegimeEngine:
 
             # Compute portfolio weights
             w = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype)
-            out.iat[i, out.columns.get_loc('regime_eq_weight')] = w['equity']
-            out.iat[i, out.columns.get_loc('regime_bond_weight')] = w['bond']
             out.iat[i, out.columns.get_loc('regime_cash_weight')] = w['cash']
+            out.iat[i, out.columns.get_loc('regime_gold_weight')] = w.get('gold', 20.0)
+            out.iat[i, out.columns.get_loc('regime_bond_weight')] = w['bond']
+            out.iat[i, out.columns.get_loc('regime_eq_weight')] = w['equity']
+            out.iat[i, out.columns.get_loc('regime_commodity_weight')] = w.get('commodity', w.get('oil', 5.0))
+            out.iat[i, out.columns.get_loc('regime_crypto_weight')] = w.get('crypto', w.get('btc', 5.0))
 
         return out
 
-    def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, int]:
+    def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, Any]:
         weights_map = {
-            1: {"equity": 10, "bond": 10, "cash": 80},   # Stagflasyon: %80 Nakit / Altın Sigortası
-            2: {"equity": 0,  "bond": 0,  "cash": 100},  # Likidite Şoku: %100 Nakit Devre Kesici
-            3: {"equity": 10, "bond": 5,  "cash": 85},   # Reel Faiz Şoku: %85 Nakit (Sıfır Tahvil Süresi)
-            4: {"equity": 5,  "bond": 15, "cash": 80},   # Kredi Temerrüt: %80 Nakit Koruma
-            5: {"equity": 90, "bond": 5,  "cash": 5},    # Küresel Likidite Rallisi: %90 Hisse (Agresif Büyüme!)
-            0: {"equity": 20, "bond": 20, "cash": 60}    # REJIMSIZ_GECIS: %60 Nakit, %20 Tahvil, %20 Hisse
+            # 1: Küresel Enflasyon & Stagflasyon Şoku
+            1: {"cash": 50.0, "gold": 25.0, "commodity": 20.0, "oil": 20.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
+            # 2: Sistemik Likidite Şoku (%95 Nakit Koruma Kalkanı)
+            2: {"cash": 95.0, "gold": 0.0, "commodity": 0.0, "oil": 0.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
+            # 3: Reel Faiz Şoku (%5+ T-Bill / Para Piyasası faizi)
+            3: {"cash": 67.26, "gold": 11.0, "commodity": 2.94, "oil": 2.94, "bond": 10.0, "equity": 8.8, "crypto": 0.0, "btc": 0.0},
+            # 4: Kredi Temerrüt Baskısı
+            4: {"cash": 65.0, "gold": 20.0, "commodity": 0.0, "oil": 0.0, "bond": 15.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
+            # 5: Küresel Likidite Rallisi (%70 Hisse + %10 Kripto)
+            5: {"cash": 10.0, "gold": 10.0, "commodity": 0.0, "oil": 0.0, "bond": 0.0, "equity": 70.0, "crypto": 10.0, "btc": 10.0},
+            # 0: REJIMSIZ_GECIS (%35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto)
+            0: {"cash": 35.0, "gold": 20.0, "commodity": 5.0, "oil": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0, "btc": 5.0}
         }
-        return weights_map.get(regime_id, {"equity": 20, "bond": 20, "cash": 60})
+        return weights_map.get(regime_id, {
+            "cash": 35.0, "gold": 20.0, "commodity": 5.0, "oil": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0, "btc": 5.0
+        })
 
     def get_asset_recommendations(self, regime_id: int, subtype: str = "") -> Dict[str, str]:
         if regime_id == 1:
