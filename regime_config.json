@@ -285,16 +285,30 @@
     "r5_ndl_z": 0.0
   },
   "backtest_metrics": {
-    "annualized_return": 6.83,
-    "annualized_volatility": 3.42,
-    "sharpe_ratio": 1.12,
-    "max_drawdown": 6.95,
-    "calmar_ratio": 0.98,
-    "total_return": 80.93,
-    "spx_benchmark_return": 108.47,
-    "spx_benchmark_drawdown": 45.97,
-    "benchmark_60_40_return": 67.34,
-    "benchmark_60_40_drawdown": 36.01,
-    "crisis_recall": 100.0
+    "strategy": {
+      "annualized_return": 6.83,
+      "annualized_volatility": 3.42,
+      "sharpe_ratio": 1.12,
+      "max_drawdown": 6.95,
+      "calmar_ratio": 0.98,
+      "total_return": 80.93
+    },
+    "benchmark_60_40": {
+      "annualized_return": 5.9,
+      "annualized_volatility": 8.3,
+      "sharpe_ratio": 0.35,
+      "max_drawdown": 36.01,
+      "calmar_ratio": 0.16,
+      "total_return": 67.34
+    },
+    "benchmark_spx": {
+      "annualized_return": 8.53,
+      "annualized_volatility": 13.79,
+      "sharpe_ratio": 0.4,
+      "max_drawdown": 45.97,
+      "calmar_ratio": 0.19,
+      "total_return": 108.47
+    },
+    "crisis_recall_pct": 100.0
   }
 }
