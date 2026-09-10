@@ -87,9 +87,11 @@ Tarihsel makro stres ve ralli dönemlerinde (2018 Fed QT, Mart 2020 COVID Likidi
 
 | Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🏛️ **Macro Sentinel Multi-Asset** | **Dinamik 6 Varlık (Rejime Duyarlı Geçiş)** | **%13.15** | **%3.73** | **2.72 (EFSANEVİ)** | **%5.99 (MUTLAK KORUMA)** | **2.20 (ZİRVE)** | **+%203.18** |
+| ⚡ **Macro Sentinel Apex (Optimum)** | **Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)** | **%14.20** | **%3.98** | **2.81 (REKOR)** | **%5.63 (MUTLAK KORUMA)** | **2.52 (ZİRVE)** | **+%229.20** |
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %9.87 | %3.78 | 1.82 | %12.58 (Düşük Risk) | 0.79 | +%132.87 |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %10.96 | %5.22 | 1.52 | %20.63 (Yüksek Büyüme) | 0.53 | +%154.25 |
+| 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto | %7.70 | %2.27 | 2.07 | %3.41 (MİNİMUM DD) | 2.26 | +%94.69 |
+| 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %10.01 | %5.58 | 1.26 | %21.64 | 0.46 | +%135.41 |
 | 📉 **Eski Statik 60/40 (Referans)** | %60 Hisse / %40 Tahvil (Dar Kapsam) | %5.90 | %8.30 | 0.35 | %36.01 (Ağır Kayıp) | 0.16 | +%67.34 |
 | 📈 Benchmark S&P 500 Buy & Hold | %100 SPX Buy & Hold | %8.53 | %13.79 | 0.40 | %45.97 (Ağır Çöküş) | 0.19 | +%108.47 |
 

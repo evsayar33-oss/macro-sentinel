@@ -301,14 +301,14 @@
   },
   "backtest_metrics": {
     "strategy": {
-      "name": "🏛️ Macro Sentinel Multi-Asset",
-      "allocation_desc": "Dinamik 6 Varlık (Rejime Duyarlı Geçiş)",
-      "annualized_return": 13.15,
-      "annualized_volatility": 3.73,
-      "sharpe_ratio": 2.72,
-      "max_drawdown": 5.99,
-      "calmar_ratio": 2.2,
-      "total_return": 203.18
+      "name": "⚡ Macro Sentinel Apex (Optimum)",
+      "allocation_desc": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
+      "annualized_return": 14.2,
+      "annualized_volatility": 3.98,
+      "sharpe_ratio": 2.81,
+      "max_drawdown": 5.63,
+      "calmar_ratio": 2.52,
+      "total_return": 229.2
     },
     "benchmark_defensive_shield": {
       "name": "🛡️ Benchmark 1: Defensive Shield",
@@ -329,6 +329,26 @@
       "max_drawdown": 20.63,
       "calmar_ratio": 0.53,
       "total_return": 154.25
+    },
+    "benchmark_taleb_barbell": {
+      "name": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
+      "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
+      "annualized_return": 7.7,
+      "annualized_volatility": 2.27,
+      "sharpe_ratio": 2.07,
+      "max_drawdown": 3.41,
+      "calmar_ratio": 2.26,
+      "total_return": 94.69
+    },
+    "benchmark_allweather_plus": {
+      "name": "🌐 Benchmark 4: All-Weather Plus",
+      "allocation_desc": "%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto",
+      "annualized_return": 10.01,
+      "annualized_volatility": 5.58,
+      "sharpe_ratio": 1.26,
+      "max_drawdown": 21.64,
+      "calmar_ratio": 0.46,
+      "total_return": 135.41
     },
     "benchmark_60_40": {
       "name": "📉 Eski Statik 60/40 (Referans)",

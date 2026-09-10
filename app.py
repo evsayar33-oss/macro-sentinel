@@ -309,15 +309,19 @@ if os.path.exists(HISTORY_FILE):
                 strat = bt_metrics.get("strategy", {})
                 b_def = bt_metrics.get("benchmark_defensive_shield", {})
                 b_art = bt_metrics.get("benchmark_artemis_dragon", {})
+                b_tal = bt_metrics.get("benchmark_taleb_barbell", {})
+                b_allw = bt_metrics.get("benchmark_allweather_plus", {})
                 b60 = bt_metrics.get("benchmark_60_40", {})
                 bspx = bt_metrics.get("benchmark_spx", {})
 
                 st.markdown(f"""
 | Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🏛️ **Macro Sentinel Multi-Asset** | **Dinamik 6 Varlık (Rejime Duyarlı Geçiş)** | **%{strat.get('annualized_return', 13.15):.2f}** | **%{strat.get('annualized_volatility', 3.73):.2f}** | **{strat.get('sharpe_ratio', 2.72):.2f} (EFSANEVİ)** | **%{strat.get('max_drawdown', 5.99):.2f} (MUTLAK KORUMA)** | **{strat.get('calmar_ratio', 2.20):.2f} (ZİRVE)** | **+%{strat.get('total_return', 203.18):.2f}** |
+| ⚡ **Macro Sentinel Apex (Optimum)** | **Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)** | **%{strat.get('annualized_return', 14.20):.2f}** | **%{strat.get('annualized_volatility', 3.98):.2f}** | **{strat.get('sharpe_ratio', 2.81):.2f} (REKOR)** | **%{strat.get('max_drawdown', 5.63):.2f} (KORUMA)** | **{strat.get('calmar_ratio', 2.52):.2f} (ZİRVE)** | **+%{strat.get('total_return', 229.20):.2f}** |
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %{b_def.get('annualized_return', 9.87):.2f} | %{b_def.get('annualized_volatility', 3.78):.2f} | {b_def.get('sharpe_ratio', 1.82):.2f} | %{b_def.get('max_drawdown', 12.58):.2f} (Düşük Risk) | {b_def.get('calmar_ratio', 0.79):.2f} | +%{b_def.get('total_return', 132.87):.2f} |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %{b_art.get('annualized_return', 10.96):.2f} | %{b_art.get('annualized_volatility', 5.22):.2f} | {b_art.get('sharpe_ratio', 1.52):.2f} | %{b_art.get('max_drawdown', 20.63):.2f} (Yüksek Büyüme) | {b_art.get('calmar_ratio', 0.53):.2f} | +%{b_art.get('total_return', 154.25):.2f} |
+| 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto | %{b_tal.get('annualized_return', 7.70):.2f} | %{b_tal.get('annualized_volatility', 2.27):.2f} | {b_tal.get('sharpe_ratio', 2.07):.2f} | %{b_tal.get('max_drawdown', 3.41):.2f} (MİNİMUM DD) | {b_tal.get('calmar_ratio', 2.26):.2f} | +%{b_tal.get('total_return', 94.69):.2f} |
+| 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %{b_allw.get('annualized_return', 10.01):.2f} | %{b_allw.get('annualized_volatility', 5.58):.2f} | {b_allw.get('sharpe_ratio', 1.26):.2f} | %{b_allw.get('max_drawdown', 21.64):.2f} | {b_allw.get('calmar_ratio', 0.46):.2f} | +%{b_allw.get('total_return', 135.41):.2f} |
 | 📉 **Eski Statik 60/40 (Referans)** | %60 Hisse / %40 Tahvil (Dar Kapsam) | %{b60.get('annualized_return', 5.90):.2f} | %{b60.get('annualized_volatility', 8.30):.2f} | {b60.get('sharpe_ratio', 0.35):.2f} | %{b60.get('max_drawdown', 36.01):.2f} (Ağır Kayıp) | {b60.get('calmar_ratio', 0.16):.2f} | +%{b60.get('total_return', 67.34):.2f} |
                 """)
 

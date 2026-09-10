@@ -486,8 +486,8 @@ class MacroRegimeEngine:
 
     def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, Any]:
         weights_map = {
-            # 1: Küresel Enflasyon & Stagflasyon Şoku
-            1: {"cash": 50.0, "gold": 25.0, "commodity": 20.0, "oil": 20.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
+            # 1: Küresel Enflasyon & Stagflasyon Şoku (Apex Optimize: %30 Emtia/Petrol, %25 Altın)
+            1: {"cash": 40.0, "gold": 25.0, "commodity": 30.0, "oil": 30.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
             # 2: Sistemik Likidite Şoku (%95 Nakit Koruma Kalkanı)
             2: {"cash": 95.0, "gold": 0.0, "commodity": 0.0, "oil": 0.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
             # 3: Reel Faiz Şoku (%5+ T-Bill / Para Piyasası faizi)

@@ -1,0 +1,173 @@
+{
+  "monte_carlo_10k": {
+    "🏛️ Macro Sentinel Multi-Asset": {
+      "Median 1Y Return": 13.12,
+      "5th Percentile": 4.29,
+      "95th Percentile": 24.81,
+      "VaR 95% (1Y)": 0.0,
+      "VaR 99% (1Y)": 0.0,
+      "CVaR 95% (ES)": 1.31,
+      "CVaR 99% (ES)": 1.31,
+      "Ortalama Max DD": 2.35,
+      "99% Worst Max DD": 6.63,
+      "P(DD > 10%)": "%0.0",
+      "P(DD > 20%)": "%0.0"
+    },
+    "🛡️ Defensive Shield": {
+      "Median 1Y Return": 2.28,
+      "5th Percentile": -9.04,
+      "95th Percentile": 12.65,
+      "VaR 95% (1Y)": 9.04,
+      "VaR 99% (1Y)": 13.4,
+      "CVaR 95% (ES)": 11.75,
+      "CVaR 99% (ES)": 15.86,
+      "Ortalama Max DD": 6.37,
+      "99% Worst Max DD": 16.18,
+      "P(DD > 10%)": "%13.5",
+      "P(DD > 20%)": "%0.2"
+    },
+    "🐉 Artemis Dragon": {
+      "Median 1Y Return": -0.4,
+      "5th Percentile": -16.5,
+      "95th Percentile": 15.0,
+      "VaR 95% (1Y)": 16.5,
+      "VaR 99% (1Y)": 23.29,
+      "CVaR 95% (ES)": 20.7,
+      "CVaR 99% (ES)": 26.38,
+      "Ortalama Max DD": 10.26,
+      "99% Worst Max DD": 26.05,
+      "P(DD > 10%)": "%43.9",
+      "P(DD > 20%)": "%5.7"
+    },
+    "📉 Statik 60/40": {
+      "Median 1Y Return": -13.49,
+      "5th Percentile": -34.68,
+      "95th Percentile": 9.61,
+      "VaR 95% (1Y)": 34.68,
+      "VaR 99% (1Y)": 42.15,
+      "CVaR 95% (ES)": 39.48,
+      "CVaR 99% (ES)": 45.76,
+      "Ortalama Max DD": 21.3,
+      "99% Worst Max DD": 44.68,
+      "P(DD > 10%)": "%90.3",
+      "P(DD > 20%)": "%51.6"
+    },
+    "📈 S&P 500 Buy & Hold": {
+      "Median 1Y Return": -11.29,
+      "5th Percentile": -40.12,
+      "95th Percentile": 23.0,
+      "VaR 95% (1Y)": 40.12,
+      "VaR 99% (1Y)": 49.34,
+      "CVaR 95% (ES)": 45.95,
+      "CVaR 99% (ES)": 53.7,
+      "Ortalama Max DD": 24.72,
+      "99% Worst Max DD": 52.64,
+      "P(DD > 10%)": "%95.2",
+      "P(DD > 20%)": "%61.4"
+    }
+  },
+  "sensitivity_top_calmar": [
+    {
+      "Kripto (BTC) %": "%2.5",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%42.5",
+      "Yıllık Getiri (%)": 8.02,
+      "Max Drawdown (%)": 7.13,
+      "Sharpe Oranı": 1.65,
+      "Calmar Oranı": 1.12,
+      "Toplam Getiri (%)": 99.83
+    },
+    {
+      "Kripto (BTC) %": "%5.0",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%40.0",
+      "Yıllık Getiri (%)": 9.47,
+      "Max Drawdown (%)": 8.9,
+      "Sharpe Oranı": 1.82,
+      "Calmar Oranı": 1.06,
+      "Toplam Getiri (%)": 125.22
+    },
+    {
+      "Kripto (BTC) %": "%7.5",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%37.5",
+      "Yıllık Getiri (%)": 10.92,
+      "Max Drawdown (%)": 10.64,
+      "Sharpe Oranı": 1.86,
+      "Calmar Oranı": 1.03,
+      "Toplam Getiri (%)": 153.59
+    },
+    {
+      "Kripto (BTC) %": "%10.0",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%35.0",
+      "Yıllık Getiri (%)": 12.39,
+      "Max Drawdown (%)": 12.45,
+      "Sharpe Oranı": 1.85,
+      "Calmar Oranı": 1.0,
+      "Toplam Getiri (%)": 185.27
+    },
+    {
+      "Kripto (BTC) %": "%12.5",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%32.5",
+      "Yıllık Getiri (%)": 13.86,
+      "Max Drawdown (%)": 14.26,
+      "Sharpe Oranı": 1.83,
+      "Calmar Oranı": 0.97,
+      "Toplam Getiri (%)": 220.6
+    }
+  ],
+  "sensitivity_top_sharpe": [
+    {
+      "Kripto (BTC) %": "%7.5",
+      "Emtia (Petrol) %": "%2.5",
+      "Nakit %": "%35.0",
+      "Yıllık Getiri (%)": 11.13,
+      "Max Drawdown (%)": 12.48,
+      "Sharpe Oranı": 1.89,
+      "Calmar Oranı": 0.89,
+      "Toplam Getiri (%)": 157.91
+    },
+    {
+      "Kripto (BTC) %": "%10.0",
+      "Emtia (Petrol) %": "%2.5",
+      "Nakit %": "%32.5",
+      "Yıllık Getiri (%)": 12.6,
+      "Max Drawdown (%)": 14.28,
+      "Sharpe Oranı": 1.88,
+      "Calmar Oranı": 0.88,
+      "Toplam Getiri (%)": 190.12
+    },
+    {
+      "Kripto (BTC) %": "%7.5",
+      "Emtia (Petrol) %": "%5.0",
+      "Nakit %": "%32.5",
+      "Yıllık Getiri (%)": 11.34,
+      "Max Drawdown (%)": 14.31,
+      "Sharpe Oranı": 1.87,
+      "Calmar Oranı": 0.79,
+      "Toplam Getiri (%)": 162.2
+    },
+    {
+      "Kripto (BTC) %": "%10.0",
+      "Emtia (Petrol) %": "%5.0",
+      "Nakit %": "%30.0",
+      "Yıllık Getiri (%)": 12.81,
+      "Max Drawdown (%)": 16.08,
+      "Sharpe Oranı": 1.87,
+      "Calmar Oranı": 0.8,
+      "Toplam Getiri (%)": 194.95
+    },
+    {
+      "Kripto (BTC) %": "%7.5",
+      "Emtia (Petrol) %": "%0.0",
+      "Nakit %": "%37.5",
+      "Yıllık Getiri (%)": 10.92,
+      "Max Drawdown (%)": 10.64,
+      "Sharpe Oranı": 1.86,
+      "Calmar Oranı": 1.03,
+      "Toplam Getiri (%)": 153.59
+    }
+  ]
+}
