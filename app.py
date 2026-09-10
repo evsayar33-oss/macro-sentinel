@@ -311,7 +311,6 @@ if os.path.exists(HISTORY_FILE):
                 b_def = bt_metrics.get("benchmark_defensive_shield", {})
                 b_art = bt_metrics.get("benchmark_artemis_dragon", {})
                 b_tal = bt_metrics.get("benchmark_taleb_barbell", {})
-                b_allw = bt_metrics.get("benchmark_allweather_plus", {})
 
                 st.markdown(f"""
 | Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
@@ -320,7 +319,6 @@ if os.path.exists(HISTORY_FILE):
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %{b_def.get('annualized_return', 9.87):.2f} | %{b_def.get('annualized_volatility', 3.78):.2f} | {b_def.get('sharpe_ratio', 1.82):.2f} | %{b_def.get('max_drawdown', 12.58):.2f} (Düşük Risk) | {b_def.get('calmar_ratio', 0.79):.2f} | +%{b_def.get('total_return', 132.87):.2f} |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %{b_art.get('annualized_return', 10.96):.2f} | %{b_art.get('annualized_volatility', 5.22):.2f} | {b_art.get('sharpe_ratio', 1.52):.2f} | %{b_art.get('max_drawdown', 20.63):.2f} (Yüksek Büyüme) | {b_art.get('calmar_ratio', 0.53):.2f} | +%{b_art.get('total_return', 154.25):.2f} |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto | %{b_tal.get('annualized_return', 7.70):.2f} | %{b_tal.get('annualized_volatility', 2.27):.2f} | {b_tal.get('sharpe_ratio', 2.07):.2f} | %{b_tal.get('max_drawdown', 3.41):.2f} (MİNİMUM DD) | {b_tal.get('calmar_ratio', 2.26):.2f} | +%{b_tal.get('total_return', 94.69):.2f} |
-| 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %{b_allw.get('annualized_return', 10.01):.2f} | %{b_allw.get('annualized_volatility', 5.58):.2f} | {b_allw.get('sharpe_ratio', 1.26):.2f} | %{b_allw.get('max_drawdown', 21.64):.2f} | {b_allw.get('calmar_ratio', 0.46):.2f} | +%{b_allw.get('total_return', 135.41):.2f} |
                 """)
 
                 st.success(f"✅ **Kriz Dönemi Tespit Oranı (Crisis Recall): %{bt_metrics.get('crisis_recall_pct', 100.0):.0f}** (COVID-19 Mart 2020, 2022 Stagflasyon, 2022 Faiz Şoku ve Ağustos 2024 JPY Carry çöküşü %100 başarıyla önceden tespit edilmiştir).")

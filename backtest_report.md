@@ -16,7 +16,6 @@ Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet an
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %9.87 | %3.78 | 1.82 | %12.58 (Düşük Risk) | 0.79 | +%132.87 |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %10.96 | %5.22 | 1.52 | %20.63 (Yüksek Büyüme) | 0.53 | +%154.25 |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %7.70 | %2.27 | 2.07 | %3.41 (MİNİMUM DD) | 2.26 | +%94.69 |
-| 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %10.01 | %5.58 | 1.26 | %21.64 | 0.46 | +%135.41 |
 
 ---
 

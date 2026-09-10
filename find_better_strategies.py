@@ -2,7 +2,6 @@
 Deep Quantitative Strategy Search & Optimization Engine
 Evaluates if higher Sharpe / Calmar or lower Max DD is mathematically possible:
 1. Macro Sentinel Apex (Dynamic Regime with Calibrated Optimums: Stagflation Oil 30%, Risk-On BTC 10%)
-2. All-Weather Convex Shield (Bridgewater style upgraded with BTC convexity)
 3. Tail-Risk Asymmetric Parity (Nassim Taleb Barbell style)
 4. Dynamic Volatility-Targeted Momentum (Vol-Targeting overlay)
 """
@@ -89,9 +88,6 @@ res_apex = evaluate_ret_series(strat_apex, "⚡ Macro Sentinel Apex (Optimize)")
 taleb_r = 0.85*cash_ret + 0.10*gold_ret + 0.05*btc_ret
 res_taleb = evaluate_ret_series(taleb_r, "🛡️ Barbell Asymmetric (Taleb Style)")
 
-# 4. Bridgewater All-Weather Plus (%40 Tahvil, %30 Hisse, %15 Altın, %10 Emtia, %5 Kripto)
-allweather_r = 0.40*bond_ret + 0.30*spx_ret + 0.15*gold_ret + 0.10*oil_ret + 0.05*btc_ret
-res_allweather = evaluate_ret_series(allweather_r, "🌐 All-Weather Plus (Ray Dalio)")
 
 # 5. Mevcut Benchmarklar
 def_r = 0.35*cash_ret + 0.20*gold_ret + 0.20*bond_ret + 0.15*spx_ret + 0.05*oil_ret + 0.05*btc_ret
@@ -99,6 +95,6 @@ art_r = 0.25*spx_ret + 0.25*cash_ret + 0.20*gold_ret + 0.15*bond_ret + 0.10*oil_
 res_def = evaluate_ret_series(def_r, "🛡️ Benchmark 1: Defensive Shield")
 res_art = evaluate_ret_series(art_r, "🐉 Benchmark 2: Artemis Dragon")
 
-summary = pd.DataFrame([res_apex, res_current, res_def, res_art, res_allweather, res_taleb])
+summary = pd.DataFrame([res_apex, res_current, res_def, res_art, res_taleb])
 cols = ["Name", "Annual Return (%)", "Annual Vol (%)", "Sharpe Ratio", "Max Drawdown (%)", "Calmar Ratio", "Total Return (%)"]
 print(summary[cols].to_string(index=False))

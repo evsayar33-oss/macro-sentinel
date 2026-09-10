@@ -6,7 +6,6 @@ Calibrated for Multi-Asset 6-Asset Architecture:
 2. Benchmark 1: Multi-Asset Defensive Shield (%35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto)
 3. Benchmark 2: Artemis Dragon Portfolio (%25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto)
 4. Benchmark 3: Taleb Barbell Asymmetric (%85 Nakit & T-Bill / %10 Altın / %5 Kripto - Ultra Düşük DD %3.41)
-5. Benchmark 4: All-Weather Plus (%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto)
 """
 
 import os
@@ -257,12 +256,7 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
                        0.10 * gold_ret +
                        0.05 * btc_ret)
 
-    # 5. Benchmark 4: All-Weather Plus (Ray Dalio)
-    bench_allweather_ret = (0.40 * bond_ret +
-                           0.30 * spx_ret +
-                           0.15 * gold_ret +
-                           0.10 * oil_ret +
-                           0.05 * btc_ret)
+
 
 
 
@@ -295,7 +289,6 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     def_metrics = calc_metrics(bench_def_ret)
     art_metrics = calc_metrics(bench_art_ret)
     taleb_metrics = calc_metrics(bench_taleb_ret)
-    allw_metrics = calc_metrics(bench_allweather_ret)
 
     covid_bars = df.loc["2020-03-01":"2020-03-31"]
     covid_detected = (covid_bars['confirmed_regime_id'] == 2).any()
@@ -317,7 +310,6 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
         "benchmark_defensive_shield": def_metrics,
         "benchmark_artemis_dragon": art_metrics,
         "benchmark_taleb_barbell": taleb_metrics,
-        "benchmark_allweather_plus": allw_metrics,
         "regime_distribution": regime_dist,
         "crisis_details": {
             "covid_2020_detected": bool(covid_detected),
@@ -384,16 +376,6 @@ def main():
             "Calmar": f"{bt['benchmark_taleb_barbell']['calmar_ratio']:.2f}",
             "Toplam Getiri (%)": f"+%{bt['benchmark_taleb_barbell']['total_return']:.2f}"
         },
-        {
-            "Portföy / Strateji": "🌐 Benchmark 4: All-Weather Plus",
-            "Varlık Dağılım Mimarisi": "%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto",
-            "Yıllık Getiri (%)": f"%{bt['benchmark_allweather_plus']['annualized_return']:.2f}",
-            "Volatilite (%)": f"%{bt['benchmark_allweather_plus']['annualized_volatility']:.2f}",
-            "Sharpe": f"{bt['benchmark_allweather_plus']['sharpe_ratio']:.2f}",
-            "Max DD (%)": f"%{bt['benchmark_allweather_plus']['max_drawdown']:.2f}",
-            "Calmar": f"{bt['benchmark_allweather_plus']['calmar_ratio']:.2f}",
-            "Toplam Getiri (%)": f"+%{bt['benchmark_allweather_plus']['total_return']:.2f}"
-        },
     ])
     print(perf_summary.to_string(index=False))
 
@@ -418,11 +400,6 @@ def main():
             "name": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
             "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
             **bt["benchmark_taleb_barbell"]
-        },
-        "benchmark_allweather_plus": {
-            "name": "🌐 Benchmark 4: All-Weather Plus",
-            "allocation_desc": "%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto",
-            **bt["benchmark_allweather_plus"]
         },
         "crisis_recall_pct": 100.0
     }
@@ -450,7 +427,6 @@ Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet an
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %{bt['benchmark_defensive_shield']['annualized_return']:.2f} | %{bt['benchmark_defensive_shield']['annualized_volatility']:.2f} | {bt['benchmark_defensive_shield']['sharpe_ratio']:.2f} | %{bt['benchmark_defensive_shield']['max_drawdown']:.2f} (Düşük Risk) | {bt['benchmark_defensive_shield']['calmar_ratio']:.2f} | +%{bt['benchmark_defensive_shield']['total_return']:.2f} |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %{bt['benchmark_artemis_dragon']['annualized_return']:.2f} | %{bt['benchmark_artemis_dragon']['annualized_volatility']:.2f} | {bt['benchmark_artemis_dragon']['sharpe_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['max_drawdown']:.2f} (Yüksek Büyüme) | {bt['benchmark_artemis_dragon']['calmar_ratio']:.2f} | +%{bt['benchmark_artemis_dragon']['total_return']:.2f} |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %{bt['benchmark_taleb_barbell']['annualized_return']:.2f} | %{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f} | {bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} (MİNİMUM DD) | {bt['benchmark_taleb_barbell']['calmar_ratio']:.2f} | +%{bt['benchmark_taleb_barbell']['total_return']:.2f} |
-| 🌐 **Benchmark 4: All-Weather Plus** | %40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto | %{bt['benchmark_allweather_plus']['annualized_return']:.2f} | %{bt['benchmark_allweather_plus']['annualized_volatility']:.2f} | {bt['benchmark_allweather_plus']['sharpe_ratio']:.2f} | %{bt['benchmark_allweather_plus']['max_drawdown']:.2f} | {bt['benchmark_allweather_plus']['calmar_ratio']:.2f} | +%{bt['benchmark_allweather_plus']['total_return']:.2f} |
 
 ---
 

@@ -340,16 +340,6 @@
       "calmar_ratio": 2.26,
       "total_return": 94.69
     },
-    "benchmark_allweather_plus": {
-      "name": "🌐 Benchmark 4: All-Weather Plus",
-      "allocation_desc": "%40 Tahvil / %30 Hisse / %15 Altın / %10 Emtia / %5 Kripto",
-      "annualized_return": 10.01,
-      "annualized_volatility": 5.58,
-      "sharpe_ratio": 1.26,
-      "max_drawdown": 21.64,
-      "calmar_ratio": 0.46,
-      "total_return": 135.41
-    },
     "crisis_recall_pct": 100.0
   },
   "benchmarks": {
