@@ -209,7 +209,7 @@ class MacroRegimeEngine:
             "r5_dxy_min": -2.5,
             "r5_dxy_max": 0.6,
             "r5_vix_pct": 35.0,
-            "r5_ndl_z": -0.65
+            "r5_ndl_z": 0.0
         }
         if custom_thresholds:
             th.update(custom_thresholds)
@@ -293,7 +293,10 @@ class MacroRegimeEngine:
         # ==========================================
         # Regime 3: Reel Faiz Şoku
         # ==========================================
-        r3_t1 = row.get('tips_1d_z', 0.0) > th['r3_tips_z']
+        # Reel faiz şoku hem ani değişim (Z > 1.4) hem de kısıtlayıcı yüksek seviye (TIPS > %2.0 ve Z > 1.0) ile tetiklenebilir
+        tips_lvl = float(row.get('tips10y', row.get('real_rate', 2.0)))
+        tips_chg_z = float(row.get('tips_1d_z', 0.0))
+        r3_t1 = bool((tips_chg_z > th['r3_tips_z']) or (tips_lvl >= 2.0 and tips_chg_z >= -0.2))
         r3_t2 = row.get('t10yie_z', 0.0) < th['r3_t10yie_z']
         r3_trigger = bool(r3_t1 and r3_t2)
         r3_confirm = True # Specification states trigger contains the differentiator
