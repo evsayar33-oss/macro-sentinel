@@ -205,11 +205,11 @@ class MacroRegimeEngine:
             "r4_hy_z": 2.0,
             "r4_slope": 0.0,
             "r4_ig_z": 1.0,
-            "r5_hy_z": -0.5,
-            "r5_dxy_min": -1.0,
-            "r5_dxy_max": 0.5,
-            "r5_vix_pct": 30.0,
-            "r5_ndl_z": 0.0
+            "r5_hy_z": -0.45,
+            "r5_dxy_min": -2.5,
+            "r5_dxy_max": 0.6,
+            "r5_vix_pct": 35.0,
+            "r5_ndl_z": -0.65
         }
         if custom_thresholds:
             th.update(custom_thresholds)
@@ -380,10 +380,10 @@ class MacroRegimeEngine:
 
         # Post-hoc Sub-types:
         gold_rising = bool(row.get('gold_rising', False))
-        if dxy_z < -0.5 and gold_rising:
-            subtype_r5 = "Reflasyonist Risk-On"
-        elif -1.0 <= dxy_z <= 0.5 and not gold_rising:
-            subtype_r5 = "Klasik Goldilocks Risk-On"
+        if dxy_z <= 0.5 and gold_rising:
+            subtype_r5 = "Reflasyonist Risk-On (Zayıf Dolar & Yükselen Emtia)"
+        elif dxy_z <= 0.5 and not gold_rising:
+            subtype_r5 = "Klasik Goldilocks Risk-On (Dezenflasyonist Büyüme)"
         else:
             subtype_r5 = "Geniş Tabanlı Likidite Boğası"
 

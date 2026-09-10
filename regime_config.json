@@ -207,23 +207,23 @@
             "indicator": "Dolar Rejimi",
             "ticker": "FRED:DTWEXBGS",
             "formula": "52w_zscore",
-            "threshold": "-1.0 <= Z <= 0.5",
-            "threshold_min": -1.0,
-            "threshold_max": 0.5
+            "threshold": "Z <= 0.6 (Zayıf/Stabil Dolar)",
+            "threshold_min": -2.5,
+            "threshold_max": 0.6
           },
           {
             "indicator": "Volatilite",
             "ticker": "VIX or MOVE",
             "formula": "252_day_percentile",
             "threshold": "percentile < 30",
-            "threshold_val": 30.0
+            "threshold_val": 35.0
           },
           {
             "indicator": "Net Dolar Likiditesi",
             "ticker": "CMS_NDL_SERIES",
             "formula": "52w_zscore",
-            "threshold": "Z > 0",
-            "threshold_val": 0.0
+            "threshold": "Z > -0.65",
+            "threshold_val": -0.65
           }
         ]
       },
@@ -261,12 +261,12 @@
   },
   "backtest_metrics": {
     "strategy": {
-      "annualized_return": 5.3,
+      "annualized_return": 5.33,
       "annualized_volatility": 5.77,
-      "sharpe_ratio": 0.25,
+      "sharpe_ratio": 0.26,
       "max_drawdown": 13.55,
       "calmar_ratio": 0.39,
-      "total_return": 59.04
+      "total_return": 59.36
     },
     "benchmark_60_40": {
       "annualized_return": -1.62,

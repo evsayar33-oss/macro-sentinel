@@ -6,13 +6,13 @@ The **Macro Event Interpretation System v1.0** classifies the global market stat
 ### Performance Comparison (2018 - 2026)
 | Portfolio / Strategy | Ann. Return (%) | Ann. Volatility (%) | Sharpe Ratio | Max Drawdown (%) | Calmar Ratio | Total Return (%) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Macro Sentinel Dynamic** | **5.3%** | **5.77%** | **0.25** | **13.55%** | **0.39** | **59.04%** |
+| **Macro Sentinel Dynamic** | **5.33%** | **5.77%** | **0.26** | **13.55%** | **0.39** | **59.36%** |
 | Benchmark 60/40 (SPX/Bonds) | -1.62% | 10.38% | -0.53 | 46.66% | -0.03 | -13.65% |
 | Benchmark S&P 500 (Buy & Hold) | -4.45% | 17.17% | -0.48 | 63.0% | -0.07 | -33.57% |
 
 ## 2. Key Findings & Strategic Alpha
 1. **Drawdown Protection**: Sentinel cuts maximum drawdown drastically from 63.0% (S&P 500) down to **13.55%**, preventing catastrophic capital destruction during liquidity panics and stagflationary shocks.
-2. **Sharpe Ratio Expansion**: Achieves a Sharpe ratio of **0.25** compared to -0.53 for traditional 60/40, proving deterministic macro regime switching generates significant risk-adjusted alpha.
+2. **Sharpe Ratio Expansion**: Achieves a Sharpe ratio of **0.26** compared to -0.53 for traditional 60/40, proving deterministic macro regime switching generates significant risk-adjusted alpha.
 3. **100% Crisis Episode Detection**:
    - **March 2020 COVID Crash**: Successfully detected Regime 2 (Sistemik Likidite Şoku) & forced 90-100% Cash protection.
    - **2022 H1 Commodity Shock**: Successfully detected Regime 1 (Küresel Enflasyon & Stagflasyon Şoku) with energy hedging.
