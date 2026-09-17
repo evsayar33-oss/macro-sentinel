@@ -44,10 +44,13 @@ if os.path.exists(HISTORY_FILE):
         vix_term = latest.get('vix_term', 0.85)
         ml_conf = int(latest.get('ml_confidence', 75))
         api_durum = latest.get('api_status', 'Online')
-        emergency = bool(latest.get('emergency', False))
+        emergency = str(latest.get('emergency', False)).strip().lower() in {'1', 'true', 'yes', 'on'}
         son_guncelleme = latest.get('date', 'Bilinmiyor')
         act_growth = latest.get('active_growth_name', 'Bakir/Altin')
         oil_trend = latest.get('oil_trend', 0.0)
+        oil_event_score = float(latest.get('oil_event_score', 0.0) or 0.0)
+        commodity_event_active = str(latest.get('commodity_event_active', False)).strip().lower() in {'1', 'true', 'yes', 'on'}
+        commodity_event_reason = str(latest.get('commodity_event_reason', ''))
 
         # Macro Event Interpretation System Fields
         regime_id = int(latest.get('regime_id', 0))
@@ -62,27 +65,27 @@ if os.path.exists(HISTORY_FILE):
         try:
             from regime_engine import MacroRegimeEngine
             _engine = MacroRegimeEngine()
-            _w = _engine.get_portfolio_weights(int(regime_id), regime_subtype)
-            default_eq, default_bnd, default_csh = _w['equity'], _w['bond'], _w['cash']
-            default_gld = _w.get('gold', 20.0)
-            default_cmd = _w.get('commodity', _w.get('oil', 5.0))
-            default_crp = _w.get('crypto', _w.get('btc', 5.0))
+            # Recompute the live allocation from the latest macro row. Do not
+            # trust legacy CSV weight columns because older rows were static
+            # and therefore cannot reflect the independent commodity event.
+            _w = _engine.get_portfolio_weights(int(regime_id), regime_subtype, row=latest)
+            eq_w = float(_w['equity'])
+            bnd_w = float(_w['bond'])
+            csh_w = float(_w['cash'])
+            gold_w = float(_w.get('gold', 20.0))
+            cmd_w = float(_w.get('commodity', 5.0))
+            crp_w = float(_w.get('crypto', 5.0))
         except Exception:
-            default_eq, default_bnd, default_csh = 15.0, 20.0, 35.0
-            default_gld, default_cmd, default_crp = 20.0, 5.0, 5.0
-
-        raw_eq = latest.get('eq_weight')
-        raw_bnd = latest.get('bond_weight')
-        raw_csh = latest.get('cash_weight')
-
-        eq_w = float(raw_eq) if pd.notna(raw_eq) else default_eq
-        bnd_w = float(raw_bnd) if pd.notna(raw_bnd) else default_bnd
-        csh_w = float(raw_csh) if pd.notna(raw_csh) else default_csh
-        gold_w = float(latest.get('gold_weight', default_gld)) if pd.notna(latest.get('gold_weight')) else default_gld
-        cmd_w = float(latest.get('commodity_weight', default_cmd)) if pd.notna(latest.get('commodity_weight')) else default_cmd
-        crp_w = float(latest.get('crypto_weight', default_crp)) if pd.notna(latest.get('crypto_weight')) else default_crp
+            eq_w, bnd_w, csh_w = 15.0, 20.0, 35.0
+            gold_w, cmd_w, crp_w = 20.0, 5.0, 5.0
 
         # Color & Visual Mapping based on active Regime
+        if commodity_event_active:
+            st.warning(
+                f"🛢️ Bağımsız Petrol Olayı Aktif — skor {oil_event_score:.2f} | "
+                f"Emtia %{cmd_w:.2f} | Toplam dağılım %{eq_w + bnd_w + csh_w + gold_w + cmd_w + crp_w:.2f}."
+                + (f" {commodity_event_reason}" if commodity_event_reason else "")
+            )
         if emergency or regime_id == 2:
             reg_color = "#ff1744"
             badge_class = "badge-shock"
