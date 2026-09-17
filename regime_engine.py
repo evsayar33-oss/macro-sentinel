@@ -62,12 +62,40 @@ class MacroRegimeEngine:
     def prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         p = df.copy()
 
-        # 1. Oil Shock
+        # 1. Oil / Commodity Shock
+        # Keep the oil sensor independent from the growth proxy.  Oil is an
+        # independent macro input and must not be multiplied by an unrelated
+        # equity-growth direction signal.
         if 'oil' in p.columns:
+            oil_ret_5d = p['oil'].pct_change(5)
             oil_ret_20d = p['oil'].pct_change(20)
+            oil_daily_vol_60d = p['oil'].pct_change().rolling(60, min_periods=20).std()
+
+            p['oil_ret_5d_z'] = self.calc_rolling_z(oil_ret_5d, window=252)
             p['oil_ret_20d_z'] = self.calc_rolling_z(oil_ret_20d, window=252)
+
+            # Volatility-adjusted 20-day trend strength.  This replaces the
+            # previous growth-dependent sign flip in main.py.
+            p['oil_trend_strength'] = oil_ret_20d / (oil_daily_vol_60d * np.sqrt(20.0) + 1e-6)
+            p['oil_trend'] = p['oil_trend_strength']
+            p['oil_level_z'] = self.calc_rolling_z(p['oil'], window=252)
         else:
+            p['oil_ret_5d_z'] = 0.0
             p['oil_ret_20d_z'] = 0.0
+            p['oil_trend_strength'] = 0.0
+            p['oil_trend'] = 0.0
+            p['oil_level_z'] = 0.0
+
+        # Optional commodity breadth: copper + silver.  It is a secondary
+        # confirmation only; oil can trigger the event without requiring it.
+        breadth_parts = []
+        for commodity_col in ('copper', 'silver'):
+            if commodity_col in p.columns:
+                breadth_parts.append(p[commodity_col].pct_change(20) > 0)
+        if breadth_parts:
+            p['commodity_breadth_20d'] = pd.concat(breadth_parts, axis=1).mean(axis=1)
+        else:
+            p['commodity_breadth_20d'] = 0.0
 
         # 2. Freight / Trade Shock
         if 'freight' in p.columns:
@@ -194,8 +222,10 @@ class MacroRegimeEngine:
         # Regime 1: Küresel Enflasyon & Stagflasyon Şoku
         # ==========================================
         oil_z = float(row.get('oil_ret_20d_z', 0.0))
-        oil_trend = float(row.get('oil_trend', 0.0))
-        # Petrol şoku: 20 günlük getiri Z > 1.4 VEYA yapısal güçlü petrol trendi (> 2.0σ)
+        oil_trend = float(row.get('oil_trend_strength', row.get('oil_trend', 0.0)))
+        # Regime-1 classification still requires the broader stagflation
+        # confirmation chain, but oil itself is no longer discarded just
+        # because those secondary conditions are not simultaneously active.
         r1_t1 = bool((oil_z > th['r1_oil_z']) or (oil_trend >= 2.0))
 
         # Navlun / Ticaret Şoku: Hem hacim çöküşü (Z < -0.9) hem de tedarik aksaklığı / maliyet patlaması (Z > 1.5)
@@ -430,6 +460,9 @@ class MacroRegimeEngine:
         out['regime_eq_weight'] = 15.0
         out['regime_commodity_weight'] = 5.0
         out['regime_crypto_weight'] = 5.0
+        out['oil_event_score'] = 0.0
+        out['commodity_event_active'] = False
+        out['commodity_event_reason'] = ''
 
         current_confirmed_id = 0
         current_confirmed_name = "REJIMSIZ_GECIS"
@@ -473,35 +506,139 @@ class MacroRegimeEngine:
             out.iat[i, out.columns.get_loc('regime_subtype')] = current_confirmed_subtype
             out.iat[i, out.columns.get_loc('hysteresis_days_left')] = hysteresis_counter
 
-            # Compute portfolio weights
-            w = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype)
+            # Compute portfolio weights using the confirmed regime plus the
+            # independent real-time commodity event overlay.
+            w = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype, row=row)
             out.iat[i, out.columns.get_loc('regime_cash_weight')] = w['cash']
             out.iat[i, out.columns.get_loc('regime_gold_weight')] = w.get('gold', 20.0)
             out.iat[i, out.columns.get_loc('regime_bond_weight')] = w['bond']
             out.iat[i, out.columns.get_loc('regime_eq_weight')] = w['equity']
             out.iat[i, out.columns.get_loc('regime_commodity_weight')] = w.get('commodity', w.get('oil', 5.0))
             out.iat[i, out.columns.get_loc('regime_crypto_weight')] = w.get('crypto', w.get('btc', 5.0))
+            out.iat[i, out.columns.get_loc('oil_event_score')] = float(w.get('oil_event_score', 0.0))
+            out.iat[i, out.columns.get_loc('commodity_event_active')] = bool(w.get('commodity_event_active', False))
+            out.iat[i, out.columns.get_loc('commodity_event_reason')] = str(w.get('commodity_event_reason', ''))
 
         return out
 
-    def get_portfolio_weights(self, regime_id: int, subtype: str = "") -> Dict[str, Any]:
+    @staticmethod
+    def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+        keys = ('cash', 'gold', 'bond', 'equity', 'commodity', 'crypto')
+        clean = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
+        total = sum(clean.values())
+        if total <= 1e-9:
+            clean = {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
+        elif abs(total - 100.0) > 1e-9:
+            clean = {k: v * 100.0 / total for k, v in clean.items()}
+        return clean
+
+    def _oil_event_score(self, row: pd.Series) -> float:
+        cfg = self.config.get("event_overlay", {}).get("oil", {})
+        if not bool(cfg.get("enabled", True)):
+            return 0.0
+
+        activation_z = float(cfg.get("activation_z", 0.75))
+        saturation_z = max(activation_z + 1e-6, float(cfg.get("saturation_z", 3.5)))
+
+        candidates = [
+            float(row.get('oil_ret_5d_z', 0.0)),
+            float(row.get('oil_ret_20d_z', 0.0)),
+            float(row.get('oil_trend_strength', row.get('oil_trend', 0.0)))
+        ]
+        shock = max(0.0, max(candidates))
+        if not np.isfinite(shock) or shock <= activation_z:
+            return 0.0
+
+        score = float(np.clip((shock - activation_z) / (saturation_z - activation_z), 0.0, 1.0))
+        breadth = float(row.get('commodity_breadth_20d', 0.0))
+        if np.isfinite(breadth) and breadth >= 0.50:
+            score = float(np.clip(score + 0.10, 0.0, 1.0))
+        return score
+
+    def _apply_event_overlays(self, base_weights: Dict[str, float], row: pd.Series, regime_id: int) -> Dict[str, Any]:
+        w = self._normalize_weights(base_weights)
+        cfg = self.config.get("event_overlay", {}).get("oil", {})
+        score = self._oil_event_score(row)
+        activation_score = float(cfg.get("activation_score", 0.20))
+
+        w['oil_event_score'] = score
+        w['commodity_event_active'] = False
+        w['commodity_event_reason'] = "No commodity event overlay active."
+
+        max_map = cfg.get("max_commodity_by_regime", {"0": 35.0, "1": 45.0, "2": 0.0, "3": 25.0, "4": 15.0, "5": 30.0})
+        max_commodity = float(max_map.get(str(regime_id), max_map.get("0", 35.0)))
+
+        # A systemic liquidity shock is handled by the emergency regime and
+        # explicitly does not chase a commodity spike.
+        if regime_id == 2:
+            w['commodity_event_reason'] = "Systemic liquidity shock: commodity overlay disabled."
+            return w
+
+        if score < activation_score or max_commodity <= w['commodity']:
+            return w
+
+        target = w['commodity'] + score * (max_commodity - w['commodity'])
+        delta = max(0.0, target - w['commodity'])
+
+        eq_funding_share = float(np.clip(cfg.get("funding_from_equity", 0.70), 0.0, 1.0))
+        eq_floor_map = cfg.get("equity_floor_by_regime", {})
+        cash_floor_map = cfg.get("cash_floor_by_regime", {})
+        eq_floor = float(eq_floor_map.get(str(regime_id), 0.0))
+        cash_floor = float(cash_floor_map.get(str(regime_id), 0.0))
+
+        eq_available = max(0.0, w['equity'] - eq_floor)
+        cash_available = max(0.0, w['cash'] - cash_floor)
+        available = eq_available + cash_available
+        delta = min(delta, available)
+
+        from_equity = min(delta * eq_funding_share, eq_available)
+        remaining = delta - from_equity
+        from_cash = min(remaining, cash_available)
+        remaining -= from_cash
+
+        if remaining > 1e-9:
+            # If the configured equity/cash floors prevent the requested target,
+            # scale back the commodity increase rather than violating the floors.
+            actual_delta = delta - remaining
+        else:
+            actual_delta = delta
+
+        w['equity'] -= from_equity
+        w['cash'] -= from_cash
+        w['commodity'] += actual_delta
+
+        w = self._normalize_weights(w)
+        w['oil_event_score'] = score
+        w['commodity_event_active'] = bool(score >= activation_score and w['commodity'] > base_weights.get('commodity', 0.0) + 1e-6)
+        w['commodity_event_reason'] = (
+            f"Independent oil shock overlay active: score={score:.2f}, "
+            f"commodity target={w['commodity']:.2f}% (regime {regime_id})."
+        )
+        return w
+
+    def get_portfolio_weights(self, regime_id: int, subtype: str = "", row: pd.Series = None) -> Dict[str, Any]:
         weights_map = {
-            # 1: Küresel Enflasyon & Stagflasyon Şoku (Apex Optimize: %30 Emtia/Petrol, %25 Altın)
-            1: {"cash": 40.0, "gold": 25.0, "commodity": 30.0, "oil": 30.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
-            # 2: Sistemik Likidite Şoku (%95 Nakit Koruma Kalkanı)
-            2: {"cash": 95.0, "gold": 0.0, "commodity": 0.0, "oil": 0.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
-            # 3: Reel Faiz Şoku (%5+ T-Bill / Para Piyasası faizi)
-            3: {"cash": 67.26, "gold": 11.0, "commodity": 2.94, "oil": 2.94, "bond": 10.0, "equity": 8.8, "crypto": 0.0, "btc": 0.0},
+            # 1: Küresel Enflasyon & Stagflasyon Şoku
+            1: {"cash": 40.0, "gold": 25.0, "commodity": 30.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0},
+            # 2: Sistemik Likidite Şoku
+            2: {"cash": 95.0, "gold": 0.0, "commodity": 0.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0},
+            # 3: Reel Faiz Şoku
+            3: {"cash": 67.26, "gold": 11.0, "commodity": 2.94, "bond": 10.0, "equity": 8.8, "crypto": 0.0},
             # 4: Kredi Temerrüt Baskısı
-            4: {"cash": 65.0, "gold": 20.0, "commodity": 0.0, "oil": 0.0, "bond": 15.0, "equity": 0.0, "crypto": 0.0, "btc": 0.0},
-            # 5: Küresel Likidite Rallisi (%70 Hisse + %10 Kripto)
-            5: {"cash": 10.0, "gold": 10.0, "commodity": 0.0, "oil": 0.0, "bond": 0.0, "equity": 70.0, "crypto": 10.0, "btc": 10.0},
-            # 0: REJIMSIZ_GECIS (%35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto)
-            0: {"cash": 35.0, "gold": 20.0, "commodity": 5.0, "oil": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0, "btc": 5.0}
+            4: {"cash": 65.0, "gold": 20.0, "commodity": 0.0, "bond": 15.0, "equity": 0.0, "crypto": 0.0},
+            # 5: Küresel Likidite Rallisi
+            5: {"cash": 10.0, "gold": 10.0, "commodity": 0.0, "bond": 0.0, "equity": 70.0, "crypto": 10.0},
+            # 0: REJIMSIZ_GECIS
+            0: {"cash": 35.0, "gold": 20.0, "commodity": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0}
         }
-        return weights_map.get(regime_id, {
-            "cash": 35.0, "gold": 20.0, "commodity": 5.0, "oil": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0, "btc": 5.0
-        })
+        base = weights_map.get(regime_id, weights_map[0])
+        base = self._normalize_weights(base)
+        if row is not None:
+            return self._apply_event_overlays(base, row, regime_id)
+        base['oil_event_score'] = 0.0
+        base['commodity_event_active'] = False
+        base['commodity_event_reason'] = "No live row supplied; regime weights only."
+        return base
 
     def get_asset_recommendations(self, regime_id: int, subtype: str = "") -> Dict[str, str]:
         if regime_id == 1:
