@@ -120,7 +120,7 @@ class UltimateSentinelEngine:
         def safe_reindex(s, default_val=0.0):
             if s.empty:
                 return pd.Series(default_val, index=y_data.index)
-            return s.reindex(y_data.index, method='ffill').fillna(method='bfill').fillna(default_val)
+            return s.reindex(y_data.index, method='ffill').bfill().fillna(default_val)
 
         fed_s = safe_reindex(raw['fed'], 7200000.0)
         tga_s = safe_reindex(raw['tga'], 750000.0)
@@ -145,13 +145,10 @@ class UltimateSentinelEngine:
                     active_growth_name = name
                     active_growth_series = series
 
-        try:
-            oil_series = y_data['CL=F'].tail(30)
-            oil_z = (oil_series.iloc[-1] - oil_series.mean()) / (oil_series.std() + 1e-6)
-            macro_conf = 1 if active_growth_series.diff(20).iloc[-1] > 0 else -1
-            oil_trend = float(oil_z * macro_conf)
-        except:
-            oil_trend = 0.0
+        # Oil is an independent macro event input.  Do not multiply its
+        # direction by the selected equity-growth proxy; that silently flips
+        # a genuine oil shock negative during growth deterioration.
+        oil_trend = 0.0
 
         # 4. KLASİK CMS FAKTÖR SKORU
         tips_s = safe_reindex(raw['tips'], 2.0)
@@ -206,6 +203,8 @@ class UltimateSentinelEngine:
         macro_df['dgs10'] = safe_reindex(raw['dgs10'], 4.2)
         macro_df['ndl'] = ndl_s
         macro_df['gold'] = y_data.get('GC=F', pd.Series(2500.0, index=y_data.index))
+        macro_df['copper'] = y_data.get('HG=F', pd.Series(4.0, index=y_data.index))
+        macro_df['silver'] = y_data.get('SI=F', pd.Series(30.0, index=y_data.index))
 
         prepared_macro = self.regime_engine.prepare_indicators(macro_df)
 
@@ -231,8 +230,9 @@ class UltimateSentinelEngine:
         else:
             regime_status = "Teyit Edildi (Aktif Şok/Ralli)"
 
-        # Portfolio sizing from deterministic macro regime
-        reg_weights = self.regime_engine.get_portfolio_weights(regime_id, regime_subtype)
+        # Portfolio sizing from the confirmed macro regime + independent
+        # commodity event overlay.
+        reg_weights = self.regime_engine.get_portfolio_weights(regime_id, regime_subtype, row=latest_macro)
         eq_weight = reg_weights['equity']
         bond_weight = reg_weights['bond']
         cash_weight = reg_weights['cash']
@@ -240,9 +240,19 @@ class UltimateSentinelEngine:
         # Siyah Kuğu / Emergency Override (Regime 2 veya Volatilite Şoku)
         emergency_mode = bool(regime_id == 2 or (float(latest_macro.get('vix', 15.0)) > 35.0))
         if emergency_mode:
-            eq_weight = 0
-            bond_weight = 10
-            cash_weight = 90
+            # Emergency override must replace the full six-asset allocation,
+            # otherwise legacy gold/commodity/crypto weights can survive and
+            # push the portfolio above 100%.
+            reg_weights = {
+                'cash': 90.0, 'bond': 10.0, 'gold': 0.0,
+                'equity': 0.0, 'commodity': 0.0, 'crypto': 0.0,
+                'oil_event_score': 0.0,
+                'commodity_event_active': False,
+                'commodity_event_reason': 'Emergency liquidity override active.'
+            }
+            eq_weight = 0.0
+            bond_weight = 10.0
+            cash_weight = 90.0
             ml_confidence = 0
         else:
             ml_confidence = int(np.clip(75 + float(cms) * 20, 20, 100))
@@ -268,7 +278,11 @@ class UltimateSentinelEngine:
             'yield_curve': round(float(yc_val), 2),
             'w_str': ",".join([f"{w:.2f}" for w in weights]),
             'vix_term': round(float(vix_term), 3),
-            'oil_trend': round(float(oil_trend), 3),
+            'oil_trend': round(float(latest_macro.get('oil_trend_strength', 0.0)), 3),
+            'oil_ret_5d_z': round(float(latest_macro.get('oil_ret_5d_z', 0.0)), 2),
+            'oil_event_score': round(float(reg_weights.get('oil_event_score', 0.0)), 3),
+            'commodity_event_active': bool(reg_weights.get('commodity_event_active', False)),
+            'commodity_event_reason': str(reg_weights.get('commodity_event_reason', '')),
             'ml_confidence': ml_confidence,
             'eq_weight': eq_weight,
             'bond_weight': bond_weight,
@@ -276,6 +290,7 @@ class UltimateSentinelEngine:
             'gold_weight': reg_weights.get('gold', 20.0),
             'commodity_weight': reg_weights.get('commodity', 5.0),
             'crypto_weight': reg_weights.get('crypto', 5.0),
+            'allocation_total': round(float(eq_weight + bond_weight + cash_weight + reg_weights.get('gold', 0.0) + reg_weights.get('commodity', 0.0) + reg_weights.get('crypto', 0.0)), 4),
             # YENİ ENTEGRASYON: 5 DETERMINISTIC MAKRO REJİM PARAMETRELERİ
             'regime_id': regime_id,
             'regime_name': regime_name,
