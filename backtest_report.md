@@ -12,7 +12,7 @@ Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet an
 
 | Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| ⚡ **Macro Sentinel Apex (Optimum)** | **Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)** | **%14.20** | **%3.98** | **2.81 (REKOR)** | **%5.63 (KORUMA)** | **2.52 (ZİRVE)** | **+%229.20** |
+| ⚡ **Macro Sentinel Apex (Optimum)** | **Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)** | **%18.31** | **%4.83** | **3.17 (REKOR)** | **%5.09 (KORUMA)** | **3.60 (ZİRVE)** | **+%352.47** |
 | 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %9.87 | %3.78 | 1.82 | %12.58 (Düşük Risk) | 0.79 | +%132.87 |
 | 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %10.96 | %5.22 | 1.52 | %20.63 (Yüksek Büyüme) | 0.53 | +%154.25 |
 | 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %7.70 | %2.27 | 2.07 | %3.41 (MİNİMUM DD) | 2.26 | +%94.69 |
