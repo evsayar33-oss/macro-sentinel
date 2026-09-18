@@ -929,32 +929,50 @@ def _daily_audit(history: pd.DataFrame, current_result: Dict[str, object], min_e
     }
 
 
-def _canonicalize_result_event_state(result: Dict[str, object]) -> Dict[str, object]:
-    """Enforce one canonical oil-event state before history persistence."""
+def _canonicalize_result_event_state(result: Dict[str, object], activation_score: float = 0.20) -> Dict[str, object]:
+    """Build one authoritative oil-event state from numeric evidence.
+
+    Persisted flags/types are treated as advisory only. This prevents a stale
+    ``oil_event_type=STRUCTURAL`` value from surviving when structural
+    qualification is false.
+    """
     out = dict(result)
+
     def flag(value):
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
-    try: momentum = float(out.get("oil_momentum_score", 0.0) or 0.0)
-    except (TypeError, ValueError): momentum = 0.0
-    try: structural = float(out.get("oil_structural_score", 0.0) or 0.0)
-    except (TypeError, ValueError): structural = 0.0
-    try: pressure = float(out.get("oil_pressure_score", max(momentum, structural)) or 0.0)
-    except (TypeError, ValueError): pressure = max(momentum, structural)
+
+    def num(name, default=0.0):
+        try:
+            value = float(out.get(name, default) or default)
+            return value if np.isfinite(value) else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    threshold = max(0.0, min(1.0, float(activation_score)))
+    momentum = float(np.clip(num("oil_momentum_score"), 0.0, 1.0))
+    structural = float(np.clip(num("oil_structural_score"), 0.0, 1.0))
+    pressure = float(np.clip(max(num("oil_pressure_score", max(momentum, structural)), momentum, structural), 0.0, 1.0))
+
+    # Recompute confirmation from evidence rather than trusting the serialized
+    # event-type/active flags. A structural event requires both qualification
+    # and minimum structural score; momentum uses its numeric score directly.
     qualified = flag(out.get("oil_structural_qualified", False))
-    momentum_ok = flag(out.get("oil_momentum_confirmed", False))
-    structural_ok = qualified and structural >= 0.20
+    momentum_ok = momentum >= threshold
+    structural_ok = qualified and structural >= threshold
+
     if momentum_ok and structural_ok:
         event_type, event_score = "COMBINED", max(momentum, structural)
     elif momentum_ok:
         event_type, event_score = "MOMENTUM", momentum
     elif structural_ok:
         event_type, event_score = "STRUCTURAL", structural
-    elif pressure >= 0.20:
+    elif pressure >= float(out.get("oil_pressure_display_threshold", 0.20) or 0.20):
         event_type, event_score = "PRESSURE_ONLY", 0.0
     else:
         event_type, event_score = "NONE", 0.0
+
     out.update({
-        "oil_pressure_score": round(float(np.clip(pressure, 0.0, 1.0)), 6),
+        "oil_pressure_score": round(pressure, 6),
         "oil_event_score": round(float(np.clip(event_score, 0.0, 1.0)), 6),
         "oil_event_type": event_type,
         "oil_event_active": bool(event_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"}),
@@ -965,7 +983,13 @@ def _canonicalize_result_event_state(result: Dict[str, object]) -> Dict[str, obj
 
 
 def append_history(result: Dict[str, object]):
-    result = _canonicalize_result_event_state(result)
+    # Use the same threshold defined by the active engine configuration.
+    activation_score = float(
+        MacroRegimeEngine().config.get("event_overlay", {})
+        .get("oil", {})
+        .get("activation_score", 0.20)
+    )
+    result = _canonicalize_result_event_state(result, activation_score)
     new = pd.DataFrame([result])
     if os.path.exists(HISTORY_FILE):
         try:
@@ -983,10 +1007,33 @@ def append_history(result: Dict[str, object]):
             new[col] = np.nan
 
     combined = pd.concat([old, new[old.columns]], ignore_index=True)
-    # Avoid duplicate run records when GitHub Actions is manually retried.
     if "date" in combined.columns:
         combined = combined.drop_duplicates(subset=["date"], keep="last")
+
+    # Canonicalize the actual row that will be persisted, then write and read it
+    # back. This turns history persistence into a verified commit boundary.
+    last_index = combined.index[-1]
+    row_dict = combined.loc[last_index].to_dict()
+    canonical = _canonicalize_result_event_state(row_dict, activation_score)
+    for key, value in canonical.items():
+        if key in combined.columns:
+            combined.at[last_index, key] = value
+
     combined.to_csv(HISTORY_FILE, index=False)
+
+    persisted = pd.read_csv(HISTORY_FILE)
+    if persisted.empty:
+        raise RuntimeError("HISTORY_PERSISTENCE_FAILURE: cms_history.csv is empty after write")
+    check = _canonicalize_result_event_state(persisted.iloc[-1].to_dict(), activation_score)
+    required_fields = (
+        "oil_event_type", "oil_event_active", "oil_event_score",
+        "oil_structural_qualified", "oil_momentum_confirmed"
+    )
+    for field in required_fields:
+        if str(persisted.iloc[-1].get(field)) != str(check.get(field)):
+            raise RuntimeError(
+                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} persisted={persisted.iloc[-1].get(field)!r} canonical={check.get(field)!r}"
+            )
 
 
 if __name__ == "__main__":
