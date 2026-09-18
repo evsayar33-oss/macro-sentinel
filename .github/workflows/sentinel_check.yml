@@ -2,8 +2,8 @@ name: Macro Sentinel Autonomous Daily Update
 
 on:
   schedule:
-    # Weekdays only. Weekend runs would reuse Friday market data and could be
-    # mistaken for fresh observations.
+    # Weekdays only. The engine itself also blocks weekend manual runs unless
+    # ALLOW_WEEKEND_RUN is explicitly enabled.
     - cron: '30 21 * * 1-5'
   workflow_dispatch:
 
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   update-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -39,6 +39,7 @@ jobs:
       - name: Static syntax check
         run: |
           python -m py_compile main.py regime_engine.py app.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py
+          python -m json.tool regime_config.json >/dev/null
 
       - name: Run live Macro Sentinel engine
         env:
@@ -58,44 +59,76 @@ jobs:
 
           row = df.iloc[-1]
           health = str(row.get('data_health_status', 'HALT')).upper()
+          coverage = str(row.get('event_coverage_status', 'UNKNOWN')).upper()
           decision = str(row.get('decision_status', 'UNKNOWN')).upper()
           source = str(row.get('allocation_source', 'UNKNOWN')).upper()
-          total = float(row.get('allocation_total', 0.0))
+
+          weights = [float(row.get(c, 0.0)) for c in [
+              'cash_weight','gold_weight','bond_weight','eq_weight','commodity_weight','crypto_weight'
+          ]]
+          total = sum(weights)
           oil_score = float(row.get('oil_event_score', 0.0) or 0.0)
+          oil_pressure = float(row.get('oil_pressure_score', 0.0) or 0.0)
           oil_type = str(row.get('oil_event_type', 'NONE')).upper()
+          oil_active = str(row.get('oil_event_active', 'False')).lower() in {'1','true','yes','on'}
+          overlay = str(row.get('commodity_event_active', 'False')).lower() in {'1','true','yes','on'}
           structural = float(row.get('oil_structural_score', 0.0) or 0.0)
+          structural_qualified = str(row.get('oil_structural_qualified', 'False')).lower() in {'1','true','yes','on'}
           momentum = float(row.get('oil_momentum_score', 0.0) or 0.0)
+          pending_id = int(float(row.get('pending_regime_id', 0) or 0))
+          pending_count = int(float(row.get('pending_regime_count', 0) or 0))
 
           print(f'data_health={health}')
+          print(f'event_coverage={coverage}')
           print(f'decision_status={decision}')
           print(f'allocation_source={source}')
           print(f'allocation_total={total:.4f}')
           print(f'regime={row.get("regime_name", "UNKNOWN")}')
+          print(f'oil_active={oil_active}')
           print(f'oil_event_score={oil_score:.3f}')
+          print(f'oil_pressure_score={oil_pressure:.3f}')
           print(f'oil_event_type={oil_type}')
           print(f'oil_momentum_score={momentum:.3f}')
           print(f'oil_structural_score={structural:.3f}')
+          print(f'oil_structural_qualified={structural_qualified}')
+          print(f'oil_allocation_overlay={overlay}')
+          print(f'pending_regime=R{pending_id} count={pending_count}')
           print(f'audit_status={row.get("daily_audit_status", "UNKNOWN")}')
 
-          if not math.isfinite(total) or abs(total - 100.0) > 0.05:
+          if not all(math.isfinite(x) and x >= -1e-9 for x in weights):
+              raise SystemExit('INVALID ALLOCATION WEIGHT')
+          if abs(total - 100.0) > 0.05:
               raise SystemExit('ALLOCATION INTEGRITY FAILURE')
 
-          allowed_decisions = {'LIVE', 'HOLD_LAST_VALID', 'MARKET_CLOSED_HOLD'}
-          if decision not in allowed_decisions:
+          if decision not in {'LIVE', 'HOLD_LAST_VALID', 'MARKET_CLOSED_HOLD'}:
               raise SystemExit(f'INVALID DECISION STATUS: {decision}')
 
           if health == 'HALT' and decision == 'LIVE':
               raise SystemExit('HALT cannot coexist with LIVE decision')
-
           if source == 'LIVE_ENGINE' and health == 'HALT':
               raise SystemExit('LIVE_ENGINE source cannot coexist with HALT health')
 
-          if oil_score >= 0.20 and oil_type == 'NONE':
-              raise SystemExit('OIL EVENT METADATA INCONSISTENT: active score but NONE type')
-          if oil_type != 'NONE' and oil_score < 0.20:
-              raise SystemExit('OIL EVENT METADATA INCONSISTENT: named event below activation score')
-          if structural < 0 or structural > 1 or momentum < 0 or momentum > 1:
-              raise SystemExit('OIL EVENT SCORE RANGE FAILURE')
+          if oil_score < -1e-9 or oil_score > 1.0 + 1e-9 or oil_pressure < -1e-9 or oil_pressure > 1.0 + 1e-9:
+              raise SystemExit('OIL SCORE RANGE FAILURE')
+          if structural < -1e-9 or structural > 1.0 + 1e-9 or momentum < -1e-9 or momentum > 1.0 + 1e-9:
+              raise SystemExit('OIL COMPONENT RANGE FAILURE')
+
+          confirmed_types = {'MOMENTUM', 'STRUCTURAL', 'COMBINED'}
+          if oil_active:
+              if oil_type not in confirmed_types:
+                  raise SystemExit('OIL ACTIVE BUT EVENT TYPE IS NOT CONFIRMED')
+              if oil_score < 0.20:
+                  raise SystemExit('OIL ACTIVE BUT EVENT SCORE IS BELOW ACTIVATION')
+          else:
+              if oil_type in confirmed_types:
+                  raise SystemExit('OIL TYPE CLAIMS CONFIRMED EVENT BUT OIL_EVENT_ACTIVE IS FALSE')
+
+          if oil_type == 'STRUCTURAL' and not structural_qualified:
+              raise SystemExit('STRUCTURAL EVENT REQUIRES STRUCTURAL QUALIFICATION')
+          if overlay and not oil_active:
+              raise SystemExit('COMMODITY OVERLAY CANNOT BE ACTIVE WITHOUT CONFIRMED OIL EVENT')
+          if coverage not in {'FULL', 'PARTIAL', 'UNKNOWN', 'NOT_EVALUATED'}:
+              raise SystemExit('INVALID EVENT COVERAGE STATUS')
           PY
 
       - name: Commit trusted history update
