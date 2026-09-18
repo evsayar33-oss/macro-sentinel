@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Macro Sentinel v3.0",
+    page_title="Macro Sentinel v3.1",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -289,6 +289,30 @@ score_rows = [
     ["Kripto", f"{fnum(latest, 'strategy_asset_score_crypto', np.nan):.2f}"],
 ]
 st.dataframe(pd.DataFrame(score_rows, columns=["Varlık", "Fırsat Skoru"]), use_container_width=True, hide_index=True)
+
+st.subheader("🔮 Predictive Risk / Opportunity Validation — V3.1")
+pc1, pc2, pc3, pc4 = st.columns(4)
+with pc1:
+    st.metric("Kalibrasyon", text_or(latest, "predictive_status", "WARMUP"))
+with pc2:
+    st.metric("Güven", ratio_pct(fnum(latest, "predictive_confidence", 0.0)))
+with pc3:
+    st.metric("5g Risk Olasılığı", ratio_pct(fnum(latest, "predictive_risk_probability_5d", 0.0)))
+with pc4:
+    st.metric("20g Fırsat Olasılığı", ratio_pct(fnum(latest, "predictive_opportunity_probability_20d", 0.0)))
+
+predictive_rows = [
+    ["Matured gözlem", text_or(latest, "predictive_matured_observations", "0")],
+    ["Risk bin gözlemi", text_or(latest, "predictive_risk_bin_observations", "0")],
+    ["Fırsat bin gözlemi", text_or(latest, "predictive_opportunity_bin_observations", "0")],
+    ["Beklenen 5g medyan getiri", pct(100.0 * fnum(latest, "predictive_expected_median_return_5d", 0.0))],
+    ["Beklenen 5g kayıp", pct(100.0 * fnum(latest, "predictive_expected_loss_5d", 0.0))],
+    ["Beklenen 20g fırsat getirisi", pct(100.0 * fnum(latest, "predictive_expected_opportunity_return_20d", 0.0))],
+    ["Deterioration skoru", f"{fnum(latest, 'predictive_deterioration_score', 0.0):.2f}"],
+    ["Uygulama nedeni", text_or(latest, "predictive_adjustment_reason", "Henüz kalibre değil")],
+]
+st.dataframe(pd.DataFrame(predictive_rows, columns=["Predictive metrik", "Değer"]), use_container_width=True, hide_index=True)
+st.caption("Predictive katman yalnızca olgunlaşmış geçmiş gözlemleri kullanır. Kalibrasyon eşiği oluşana kadar bugünkü allocation'ı değiştirmez. 5g/20g sonuçları geçmiş sinyallerin sonradan ölçülen sonuçlarıdır; doğrudan fiyat tahmini değildir.")
 
 hc1, hc2, hc3 = st.columns(3)
 with hc1:

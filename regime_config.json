@@ -1,7 +1,7 @@
 {
   "system_architecture": {
     "module_name": "macro-event-interpretation-system",
-    "version": "3.0",
+    "version": "3.1",
     "principles": {
       "mutual_exclusivity": true,
       "active_regime_count": 1,
@@ -21,7 +21,8 @@
       "allocation_source_of_truth": "regimes[].default_allocation",
       "production_strategy_layer": "adaptive_strategy_layer_v3",
       "capital_preservation_governor": true
-    }
+    },
+    "predictive_validation_layer": "v3.1_empirical_point_in_time"
   },
   "priority_rules": {
     "category_priority": [
@@ -558,8 +559,9 @@
     "allocation_source": "regimes[].default_allocation",
     "event_score_semantics": "confirmed_only",
     "pressure_score_separate": true,
-    "schema_version": "3.0",
-    "production_strategy_source": "adaptive_strategy_layer_v3"
+    "schema_version": "3.1",
+    "production_strategy_source": "adaptive_strategy_layer_v3",
+    "predictive_validation": "enabled_bounded_empirical"
   },
   "research_strategies": {
     "enabled": true,
@@ -755,5 +757,33 @@
       "calmar_ratio": 1.85,
       "total_return": 154.91
     }
+  },
+  "predictive_validation": {
+    "enabled": true,
+    "risk_horizon_days": 5,
+    "opportunity_horizon_days": 20,
+    "minimum_matured_observations": 60,
+    "minimum_bin_observations": 20,
+    "risk_return_threshold_5d": -0.02,
+    "opportunity_return_threshold_20d": 0.04,
+    "bayesian_prior_strength": 12.0,
+    "prior_risk_probability_5d": 0.2,
+    "prior_opportunity_probability_20d": 0.5,
+    "score_bins": [
+      0.0,
+      0.35,
+      0.55,
+      0.75,
+      1.01
+    ],
+    "risk_reduce_probability": 0.6,
+    "opportunity_increase_probability": 0.62,
+    "max_risk_reduction": 0.25,
+    "max_risk_increase": 0.08,
+    "deterioration_soft": 0.55,
+    "deterioration_hard": 0.8,
+    "point_in_time_only": true,
+    "diagnostic_only_until_calibrated": true,
+    "audit_updates_latest_row_after_decision": true
   }
 }
