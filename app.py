@@ -118,6 +118,9 @@ allocation_total = sum(v for v in weights.values() if np.isfinite(v))
 
 oil_score = fnum(latest, "oil_event_score", 0.0)
 oil_active = bval(latest, "commodity_event_active")
+oil_momentum = fnum(latest, "oil_momentum_score", 0.0)
+oil_structural = fnum(latest, "oil_structural_score", 0.0)
+oil_event_type = text_or(latest, "oil_event_type", "NONE")
 unknown_score = fnum(latest, "unknown_event_score", 0.0)
 unknown_active = bval(latest, "unknown_event_active")
 vix3m = fnum(latest, "vix_term", np.nan)
@@ -192,23 +195,45 @@ for col, (label, value) in zip(metric_cols, metric_values):
     with col:
         st.metric(label, value)
 
-st.subheader("🛢️ Bağımsız Olay Katmanı")
-oil_col, unknown_col, breadth_col, quality_col = st.columns(4)
+st.subheader("🛢️ Petrol / Yapısal Olay Katmanı")
+oil_col, structural_col, unknown_col, breadth_col, quality_col = st.columns(5)
 with oil_col:
-    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Skor {oil_score:.2f}")
+    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Toplam {oil_score:.2f}")
+with structural_col:
+    st.metric("Olay Tipi", oil_event_type, help="MOMENTUM = hız şoku, STRUCTURAL = yüksek fiyat/süreklilik/arz baskısı, COMBINED = ikisi birlikte.")
 with unknown_col:
     st.metric("Unknown Anomaly", "AKTİF" if unknown_active else "PASİF", delta=f"Skor {unknown_score:.2f}")
 with breadth_col:
     breadth = fnum(latest, "commodity_breadth_20d", 0.0)
-    st.metric("Emtia Genişliği 20g", ratio_pct(breadth), help="0–1 oranı yüzde olarak gösterilir.")
+    energy_breadth = fnum(latest, "energy_breadth_20d", np.nan)
+    st.metric("Emtia Genişliği 20g", ratio_pct(breadth), help="Bakır/gümüş/altın 20 günlük pozitif katılım.")
+    st.caption(f"Enerji genişliği: {ratio_pct(energy_breadth)}")
 with quality_col:
     quality = fnum(latest, "oil_event_quality_60d", 0.5)
-    st.metric("Petrol Event Kalitesi", ratio_pct(quality), help="0–1 tarihsel kalite oranı yüzde olarak gösterilir.")
+    st.metric("Petrol Event Kalitesi", ratio_pct(quality), help="Geçmiş petrol olaylarının 5 günlük pozitif takip davranışının basit tarihsel ölçümü.")
+
+struct_c1, struct_c2, struct_c3, struct_c4 = st.columns(4)
+with struct_c1:
+    st.metric("Momentum Skoru", f"{oil_momentum:.2f}")
+with struct_c2:
+    st.metric("Yapısal Skor", f"{oil_structural:.2f}")
+with struct_c3:
+    level_pct = fnum(latest, "oil_level_percentile_252", np.nan)
+    st.metric("WTI Fiyat Persentili", "—" if not np.isfinite(level_pct) else f"%{level_pct:.1f}")
+with struct_c4:
+    persist = fnum(latest, "oil_high_level_persistence_60d", np.nan)
+    st.metric("Yüksek Seviye Sürekliliği", ratio_pct(persist))
 
 if oil_active:
     st.info(
-        f"🛢️ Petrol olayı aktif. Sistem emtia ağırlığını bağımsız event overlay ile artırabilir. "
-        f"Mevcut emtia: {pct(weights['Emtia'])}. {text_or(latest, 'commodity_event_reason', '')}"
+        f"🛢️ Petrol olayı aktif — {oil_event_type}. "
+        f"Momentum {oil_momentum:.2f} / Yapısal {oil_structural:.2f}. "
+        f"Emtia: {pct(weights['Emtia'])}. {text_or(latest, 'commodity_event_reason', '')}"
+    )
+else:
+    st.caption(
+        f"Petrol olayı pasif: momentum={oil_momentum:.2f}, yapısal={oil_structural:.2f}. "
+        "Fiyatın seviyesi ile kısa vadeli hareket hızı ayrı ölçülmektedir."
     )
 if unknown_active:
     st.warning(
@@ -250,6 +275,16 @@ sensor_rows = [
     ["Petrol 5g Getiri", zfmt(fnum(latest, "oil_ret_5d_z")), "Olay katmanı"],
     ["Petrol 20g Getiri", zfmt(fnum(latest, "oil_ret_20d_z")), "Olay katmanı"],
     ["Petrol 5g Anomali Persentili", f"{fnum(latest, 'oil_abs_5d_percentile', 50.0):.1f}", "Uyarlanabilir eşik"],
+    ["Petrol Fiyat Persentili 252g", f"{fnum(latest, 'oil_level_percentile_252', 0.0):.1f}", "Yapısal seviye"],
+    ["Petrol Yüksek-Seviye Sürekliliği", ratio_pct(fnum(latest, 'oil_high_level_persistence_60d', 0.0)), "Yapısal süreklilik"],
+    ["Brent Fiyat Persentili 252g", f"{fnum(latest, 'brent_level_percentile_252', 0.0):.1f}", "İkinci petrol benchmarkı"],
+    ["Brent-WTI Spread", f"{fnum(latest, 'brent_wti_spread', 0.0):.2f}", "Bölgesel dislokasyon"],
+    ["Brent-WTI Spread Persentili", f"{fnum(latest, 'brent_wti_spread_percentile_252', 0.0):.1f}", "Dislokasyon anomalisi"],
+    ["Enerji Genişliği 20g", ratio_pct(fnum(latest, 'energy_breadth_20d', 0.0)), "Enerji kompleks teyidi"],
+    ["Crude Inventory Draw Z", zfmt(fnum(latest, 'crude_inventory_draw_z', np.nan)), "EIA arz baskısı (opsiyonel)"],
+    ["Petrol Momentum Skoru", f"{oil_momentum:.2f}", "Kısa vadeli şok"],
+    ["Petrol Yapısal Skoru", f"{oil_structural:.2f}", "Kalıcı yüksek fiyat/arz stresi"],
+    ["Petrol Olay Tipi", oil_event_type, "Momentum / Structural / Combined"],
     ["Petrol Event Durumu", ("AKTİF" if oil_active else "PASİF") + f" · skor {oil_score:.2f}", "Olay katmanı"],
     ["Petrol Event Kalitesi", ratio_pct(fnum(latest, "oil_event_quality_60d", 0.5)), "Tarihsel event başarısı"],
     ["Emtia Genişliği 20g", ratio_pct(fnum(latest, "commodity_breadth_20d", 0.0)), "Teyit"],
@@ -266,6 +301,15 @@ sensor_rows = [
     ["VIX Term", "N/A" if not np.isfinite(vix3m) else f"{vix3m:.3f}", "İkincil sensör"],
 ]
 st.dataframe(pd.DataFrame(sensor_rows, columns=["Sensör", "Değer", "Rol"]), use_container_width=True, hide_index=True)
+
+st.subheader("🔗 Veri Kaynakları / Fallback Zinciri")
+source_rows = [
+    ["WTI / petrol", text_or(latest, "oil_price_source", "Bilinmiyor")],
+    ["Brent", text_or(latest, "brent_price_source", "Bilinmiyor")],
+    ["VIX 3M", text_or(latest, "vix3m_source", "Bilinmiyor")],
+    ["EIA crude inventory", text_or(latest, "eia_inventory_source", "Kullanılmıyor / key yok")],
+]
+st.dataframe(pd.DataFrame(source_rows, columns=["Sensör", "Aktif kaynak"]), use_container_width=True, hide_index=True)
 
 st.subheader("🛡️ Veri Sağlığı ve Fail-Closed")
 health_rows = [
