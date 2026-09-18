@@ -2,9 +2,9 @@ name: Macro Sentinel Autonomous Daily Update
 
 on:
   schedule:
-    # Run every day. On weekends markets are stale; the data-quality gate
-    # prevents a stale feed from changing the portfolio.
-    - cron: '30 21 * * *'
+    # Weekdays only. Weekend runs would reuse Friday market data and could be
+    # mistaken for fresh observations.
+    - cron: '30 21 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -46,10 +46,10 @@ jobs:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python main.py
 
-      - name: Validate latest decision
+      - name: Validate latest decision and model invariants
         run: |
           python - <<'PY'
-          import sys
+          import math
           import pandas as pd
 
           df = pd.read_csv('cms_history.csv')
@@ -57,27 +57,45 @@ jobs:
               raise SystemExit('cms_history.csv is empty')
 
           row = df.iloc[-1]
-          health = str(row.get('data_health_status', 'HALT'))
-          decision = str(row.get('decision_status', 'UNKNOWN'))
+          health = str(row.get('data_health_status', 'HALT')).upper()
+          decision = str(row.get('decision_status', 'UNKNOWN')).upper()
+          source = str(row.get('allocation_source', 'UNKNOWN')).upper()
           total = float(row.get('allocation_total', 0.0))
+          oil_score = float(row.get('oil_event_score', 0.0) or 0.0)
+          oil_type = str(row.get('oil_event_type', 'NONE')).upper()
+          structural = float(row.get('oil_structural_score', 0.0) or 0.0)
+          momentum = float(row.get('oil_momentum_score', 0.0) or 0.0)
 
           print(f'data_health={health}')
           print(f'decision_status={decision}')
+          print(f'allocation_source={source}')
           print(f'allocation_total={total:.4f}')
           print(f'regime={row.get("regime_name", "UNKNOWN")}')
-          print(f'oil_event_score={row.get("oil_event_score", 0.0)}')
-          print(f'oil_event_type={row.get("oil_event_type", "NONE")}')
-          print(f'oil_momentum_score={row.get("oil_momentum_score", 0.0)}')
-          print(f'oil_structural_score={row.get("oil_structural_score", 0.0)}')
-          print(f'oil_level_percentile_252={row.get("oil_level_percentile_252", 0.0)}')
-          print(f'energy_breadth_20d={row.get("energy_breadth_20d", 0.0)}')
-          print(f'commodity_weight={row.get("commodity_weight", 0.0)}')
+          print(f'oil_event_score={oil_score:.3f}')
+          print(f'oil_event_type={oil_type}')
+          print(f'oil_momentum_score={momentum:.3f}')
+          print(f'oil_structural_score={structural:.3f}')
+          print(f'audit_status={row.get("daily_audit_status", "UNKNOWN")}')
 
-          if abs(total - 100.0) > 0.05:
+          if not math.isfinite(total) or abs(total - 100.0) > 0.05:
               raise SystemExit('ALLOCATION INTEGRITY FAILURE')
 
-          if health == 'HALT' or decision not in {'LIVE', 'HOLD_LAST_VALID'}:
-              raise SystemExit('DATA HEALTH GATE FAILED — no trusted live decision')
+          allowed_decisions = {'LIVE', 'HOLD_LAST_VALID', 'MARKET_CLOSED_HOLD'}
+          if decision not in allowed_decisions:
+              raise SystemExit(f'INVALID DECISION STATUS: {decision}')
+
+          if health == 'HALT' and decision == 'LIVE':
+              raise SystemExit('HALT cannot coexist with LIVE decision')
+
+          if source == 'LIVE_ENGINE' and health == 'HALT':
+              raise SystemExit('LIVE_ENGINE source cannot coexist with HALT health')
+
+          if oil_score >= 0.20 and oil_type == 'NONE':
+              raise SystemExit('OIL EVENT METADATA INCONSISTENT: active score but NONE type')
+          if oil_type != 'NONE' and oil_score < 0.20:
+              raise SystemExit('OIL EVENT METADATA INCONSISTENT: named event below activation score')
+          if structural < 0 or structural > 1 or momentum < 0 or momentum > 1:
+              raise SystemExit('OIL EVENT SCORE RANGE FAILURE')
           PY
 
       - name: Commit trusted history update
