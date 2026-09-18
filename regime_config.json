@@ -1,13 +1,18 @@
 {
   "system_architecture": {
     "module_name": "macro-event-interpretation-system",
-    "version": "1.0",
+    "version": "2.0",
     "principles": {
       "mutual_exclusivity": true,
       "active_regime_count": 1,
       "normalization": "52_week_rolling_z_score",
       "hysteresis_confirmation_period_weeks": 2,
-      "scoring_type": "deterministic"
+      "scoring_type": "deterministic",
+      "point_in_time_only": true,
+      "fail_closed_on_data_failure": true,
+      "minimum_history_days": 126,
+      "dynamic_event_thresholds": true,
+      "unknown_event_guard": true
     }
   },
   "priority_rules": {
@@ -303,12 +308,12 @@
     "strategy": {
       "name": "⚡ Macro Sentinel Apex (Optimum)",
       "allocation_desc": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
-      "annualized_return": 14.2,
-      "annualized_volatility": 3.98,
-      "sharpe_ratio": 2.81,
-      "max_drawdown": 5.63,
-      "calmar_ratio": 2.52,
-      "total_return": 229.2
+      "annualized_return": 16.32,
+      "annualized_volatility": 4.52,
+      "sharpe_ratio": 2.95,
+      "max_drawdown": 4.82,
+      "calmar_ratio": 3.39,
+      "total_return": 288.51
     },
     "benchmark_defensive_shield": {
       "name": "🛡️ Benchmark 1: Defensive Shield",
@@ -368,37 +373,77 @@
       "description": "25% Hisse, 25% Nakit, 20% Altın, 15% Tahvil, 10% Emtia, 5% Kripto"
     }
   },
+  "data_quality": {
+    "minimum_history_days": 126,
+    "market_max_stale_days": 3,
+    "fred_max_stale_days": 7,
+    "fail_closed_on_core_sensor_failure": true,
+    "core_market_sensors": [
+      "ES=F",
+      "CL=F",
+      "GC=F",
+      "^VIX"
+    ],
+    "core_fred_sensors": [
+      "spread",
+      "tips",
+      "vix",
+      "dxy",
+      "dgs2",
+      "dgs10",
+      "t10yie"
+    ]
+  },
   "event_overlay": {
     "oil": {
       "enabled": true,
       "activation_z": 0.75,
       "saturation_z": 3.5,
+      "adaptive_percentile_gate": 80.0,
       "activation_score": 0.2,
+      "funding_from_equity": 0.7,
       "max_commodity_by_regime": {
         "0": 35.0,
         "1": 45.0,
         "2": 0.0,
-        "3": 25.0,
+        "3": 20.0,
         "4": 15.0,
-        "5": 30.0
+        "5": 25.0
       },
-      "funding_from_equity": 0.7,
       "equity_floor_by_regime": {
-        "0": 0.0,
+        "0": 5.0,
         "1": 0.0,
         "2": 0.0,
-        "3": 0.0,
+        "3": 3.0,
         "4": 0.0,
         "5": 20.0
       },
       "cash_floor_by_regime": {
-        "0": 10.0,
-        "1": 10.0,
-        "2": 90.0,
-        "3": 20.0,
-        "4": 25.0,
+        "0": 20.0,
+        "1": 25.0,
+        "2": 95.0,
+        "3": 35.0,
+        "4": 40.0,
         "5": 5.0
       }
+    },
+    "unknown_event": {
+      "enabled": true,
+      "soft_anomaly_z": 2.5,
+      "hard_anomaly_z": 3.5,
+      "activation_score": 0.25,
+      "minimum_cash": 50.0,
+      "maximum_commodity": 20.0
     }
+  },
+  "self_learning": {
+    "enabled": true,
+    "mode": "bounded_daily_audit",
+    "lookback_days": 252,
+    "minimum_event_observations": 10,
+    "max_threshold_shift_pct": 10.0,
+    "walk_forward_validation_required": true,
+    "auto_commit_model_changes": false,
+    "description": "Daily system-health and event-quality audit is allowed; parameter changes are not auto-committed without out-of-sample validation."
   }
 }
