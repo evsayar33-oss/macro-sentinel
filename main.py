@@ -983,14 +983,23 @@ def _canonicalize_result_event_state(result: Dict[str, object], activation_score
 
 
 def append_history(result: Dict[str, object]):
-    # Use the same threshold defined by the active engine configuration.
+    """Persist a canonical result without dtype-unsafe scalar mutation.
+
+    pandas may infer historical boolean-like columns as float64 (0.0/1.0).
+    Assigning a Python bool into those columns with ``.at`` can therefore raise
+    ``LossySetitemError`` / ``TypeError`` on newer pandas versions.  We avoid
+    scalar mutation completely: the last canonical row is rebuilt as a normal
+    record and concatenated back into the frame.
+    """
     activation_score = float(
         MacroRegimeEngine().config.get("event_overlay", {})
         .get("oil", {})
         .get("activation_score", 0.20)
     )
     result = _canonicalize_result_event_state(result, activation_score)
-    new = pd.DataFrame([result])
+
+    new_row = pd.DataFrame([result])
+
     if os.path.exists(HISTORY_FILE):
         try:
             old = pd.read_csv(HISTORY_FILE)
@@ -999,42 +1008,67 @@ def append_history(result: Dict[str, object]):
     else:
         old = pd.DataFrame()
 
-    for col in new.columns:
-        if col not in old.columns:
-            old[col] = np.nan
-    for col in old.columns:
-        if col not in new.columns:
-            new[col] = np.nan
+    # Make manual retries idempotent. Remove the existing record for the same
+    # timestamp before appending the freshly canonicalized row.
+    if not old.empty and "date" in old.columns and "date" in new_row.columns:
+        same_date = old["date"].astype(str).eq(str(new_row.iloc[0]["date"]))
+        old = old.loc[~same_date].copy()
 
-    combined = pd.concat([old, new[old.columns]], ignore_index=True)
-    if "date" in combined.columns:
-        combined = combined.drop_duplicates(subset=["date"], keep="last")
+    all_columns = list(dict.fromkeys(list(old.columns) + list(new_row.columns)))
+    old_aligned = old.reindex(columns=all_columns)
+    new_aligned = new_row.reindex(columns=all_columns)
+    combined = pd.concat([old_aligned, new_aligned], ignore_index=True, sort=False)
 
-    # Canonicalize the actual row that will be persisted, then write and read it
-    # back. This turns history persistence into a verified commit boundary.
-    last_index = combined.index[-1]
-    row_dict = combined.loc[last_index].to_dict()
-    canonical = _canonicalize_result_event_state(row_dict, activation_score)
-    for key, value in canonical.items():
-        if key in combined.columns:
-            combined.at[last_index, key] = value
+    # Rebuild the final row rather than assigning booleans into float columns.
+    last_row = combined.iloc[-1].to_dict()
+    canonical_last = _canonicalize_result_event_state(last_row, activation_score)
+    combined_rows = combined.iloc[:-1].to_dict(orient="records")
+    combined_rows.append(canonical_last)
+    combined = pd.DataFrame(combined_rows, columns=all_columns)
 
     combined.to_csv(HISTORY_FILE, index=False)
 
+    # Round-trip validation. CSV does not preserve Python bool dtype reliably,
+    # so compare boolean fields semantically and numeric fields with tolerance.
     persisted = pd.read_csv(HISTORY_FILE)
     if persisted.empty:
         raise RuntimeError("HISTORY_PERSISTENCE_FAILURE: cms_history.csv is empty after write")
-    check = _canonicalize_result_event_state(persisted.iloc[-1].to_dict(), activation_score)
-    required_fields = (
-        "oil_event_type", "oil_event_active", "oil_event_score",
-        "oil_structural_qualified", "oil_momentum_confirmed"
-    )
-    for field in required_fields:
-        if str(persisted.iloc[-1].get(field)) != str(check.get(field)):
+
+    persisted_last = persisted.iloc[-1].to_dict()
+    check = _canonicalize_result_event_state(persisted_last, activation_score)
+
+    def _flag(value) -> bool:
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _num(value, default=0.0) -> float:
+        try:
+            x = float(value)
+            return x if np.isfinite(x) else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    for field in ("oil_event_active", "oil_structural_qualified", "oil_momentum_confirmed"):
+        if _flag(persisted_last.get(field)) != _flag(check.get(field)):
             raise RuntimeError(
-                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} persisted={persisted.iloc[-1].get(field)!r} canonical={check.get(field)!r}"
+                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} "
+                f"persisted={persisted_last.get(field)!r} canonical={check.get(field)!r}"
             )
 
+    if str(persisted_last.get("oil_event_type", "NONE")).upper() != str(
+        check.get("oil_event_type", "NONE")
+    ).upper():
+        raise RuntimeError(
+            "HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: oil_event_type "
+            f"persisted={persisted_last.get('oil_event_type')!r} "
+            f"canonical={check.get('oil_event_type')!r}"
+        )
+
+    for field in ("oil_event_score", "oil_pressure_score"):
+        if abs(_num(persisted_last.get(field)) - _num(check.get(field))) > 0.01:
+            raise RuntimeError(
+                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} "
+                f"persisted={persisted_last.get(field)!r} canonical={check.get(field)!r}"
+            )
 
 if __name__ == "__main__":
     engine = UltimateSentinelEngine(FRED_API_KEY)
