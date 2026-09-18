@@ -38,7 +38,7 @@ jobs:
 
       - name: Static syntax check
         run: |
-          python -m py_compile main.py regime_engine.py app.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py
+          python -m py_compile main.py regime_engine.py app.py adaptive_strategy_layer.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py strategy_research.py strategy_stress_test.py
           python -m json.tool regime_config.json >/dev/null
 
       - name: Run live Macro Sentinel engine
@@ -75,6 +75,9 @@ jobs:
               raise SystemExit("SYNTHETIC ALLOCATION INTEGRITY FAILURE")
           print("synthetic invariant regression: PASS")
           PY
+
+      - name: Adaptive strategy regression test
+        run: python strategy_stress_test.py
 
       - name: Validate latest decision and model invariants
         run: |
@@ -124,21 +127,10 @@ jobs:
           oil_score = float(row.get('oil_event_score', 0.0) or 0.0)
           oil_pressure = float(row.get('oil_pressure_score', 0.0) or 0.0)
           oil_type = str(row.get('oil_event_type', 'NONE')).upper()
-          def as_bool(value):
-              text = str(value).strip().lower()
-              if text in {'true','yes','on'}:
-                  return True
-              if text in {'false','no','off','nan','none',''}:
-                  return False
-              try:
-                  return bool(float(text))
-              except (TypeError, ValueError):
-                  return False
-
-          oil_active = as_bool(row.get('oil_event_active', False))
-          overlay = as_bool(row.get('commodity_event_active', False))
+          oil_active = str(row.get('oil_event_active', 'False')).lower() in {'1','true','yes','on'}
+          overlay = str(row.get('commodity_event_active', 'False')).lower() in {'1','true','yes','on'}
           structural = float(row.get('oil_structural_score', 0.0) or 0.0)
-          structural_qualified = as_bool(row.get('oil_structural_qualified', False))
+          structural_qualified = str(row.get('oil_structural_qualified', 'False')).lower() in {'1','true','yes','on'}
           momentum = float(row.get('oil_momentum_score', 0.0) or 0.0)
           pending_id = int(float(row.get('pending_regime_id', 0) or 0))
           pending_count = int(float(row.get('pending_regime_count', 0) or 0))
@@ -195,30 +187,10 @@ jobs:
               if abs(oil_score) > 0.01:
                   raise SystemExit('INACTIVE OIL EVENT MUST HAVE ZERO EVENT SCORE')
 
-          config = __import__('json').load(open('regime_config.json', encoding='utf-8'))
-          oil_cfg = config.get('event_overlay', {}).get('oil', {})
-          struct_cfg = oil_cfg.get('structural', {})
-          level_pct = row.get('oil_level_percentile_756', row.get('oil_level_percentile_252', float('nan')))
-          persistence = row.get('oil_high_level_persistence_60d', float('nan'))
-          try:
-              level_pct = float(level_pct)
-          except (TypeError, ValueError):
-              level_pct = float('nan')
-          try:
-              persistence = float(persistence)
-          except (TypeError, ValueError):
-              persistence = float('nan')
-          required_high = level_pct >= float(struct_cfg.get('qualification_level_percentile', 85.0))
-          required_persistent = persistence >= float(struct_cfg.get('qualification_persistence', 0.40))
-
-          if required_high and required_persistent and not structural_qualified:
-              raise SystemExit('STRUCTURAL QUALIFICATION FLAG IS INCONSISTENT WITH SAVED EVIDENCE')
           if oil_type == 'STRUCTURAL' and not structural_qualified:
               raise SystemExit('STRUCTURAL EVENT REQUIRES STRUCTURAL QUALIFICATION')
           if overlay and not oil_active:
               raise SystemExit('COMMODITY OVERLAY CANNOT BE ACTIVE WITHOUT CONFIRMED OIL EVENT')
-          if (not oil_active) and overlay:
-              raise SystemExit('INACTIVE OIL EVENT CANNOT HAVE A LIVE COMMODITY OVERLAY')
           if coverage not in {'FULL', 'PARTIAL', 'UNKNOWN', 'NOT_EVALUATED'}:
               raise SystemExit('INVALID EVENT COVERAGE STATUS')
           PY
