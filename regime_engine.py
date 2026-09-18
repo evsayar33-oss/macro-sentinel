@@ -425,13 +425,23 @@ class MacroRegimeEngine:
                 "all_triggered": [5],
             }
 
+        oil_z = self._safe_float(row.get("oil_ret_20d_z"))
+        vix_z = self._safe_float(row.get("vix_z"))
+        hy_z = self._safe_float(row.get("hy_oas_z"))
+        ndl_z = self._safe_float(row.get("ndl_z"))
+        tips = self._safe_float(row.get("tips10y"))
+        note = (
+            "No named regime currently satisfies its full confirmation rules. "
+            f"Live snapshot: Oil20D Z={oil_z:.2f}, VIX Z={vix_z:.2f}, "
+            f"HY OAS Z={hy_z:.2f}, NDL Z={ndl_z:.2f}, TIPS={tips:.2f}%."
+        )
         return {
             "candidate_id": 0,
             "candidate_name": "REJIMSIZ_GECIS",
             "candidate_type": "TRANSITION",
             "candidate_subtype": "Dengeli / Nötr Piyasa",
-            "main_trigger_z": 0.0,
-            "conflict_note": "No named regime currently satisfies its full confirmation rules.",
+            "main_trigger_z": max(abs(oil_z), abs(vix_z), abs(hy_z), abs(ndl_z)),
+            "conflict_note": note,
             "all_triggered": [],
         }
 
