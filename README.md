@@ -1,22 +1,26 @@
-# Macro Sentinel v3.0 — Adaptive Cross-Asset Strategy Layer
+# Macro Sentinel V3.1 — Predictive Risk / Opportunity Layer
 
-Bu paket üç parçadan oluşur:
+## Files
+- `predictive_risk_engine.py` — point-in-time conditional risk/opportunity estimator.
+- `predictive_audit.py` — daily matured-outcome audit and CSV persistence.
+- `adaptive_strategy_layer.py` — drop-in replacement for the current strategy layer.
+- `sentinel_check_predictive.yml` — full replacement for `.github/workflows/sentinel_check.yml`.
+- `predictive_config_fragment.json` — optional config block; defaults are embedded in code, but adding this block to `regime_config.json` makes the policy explicit.
 
-- `adaptive_strategy_layer.py`: üretim strateji katmanı.
-- `strategy_research.py`: gerçek geçmiş yeterliyse walk-forward / Pareto araştırma motoru.
-- `main_integration.patch`: mevcut `main.py` içine entegrasyon değişikliği.
-- `strategy_config_patch.json`: `regime_config.json` içindeki `research_strategies.adaptive_layer` altına eklenecek ayarlar.
+## Operational contract
+1. No future outcome may change today's allocation.
+2. Predictive adaptation remains in WARMUP until at least 60 matured observations and 20 observations in both the active risk and opportunity score bins.
+3. Bayesian shrinkage keeps probabilities conservative during the early calibrated period.
+4. The predictive layer can reduce risk, increase risk only within a small bound, or impose an immediate deterioration cap.
+5. Hard/broad cross-asset stress and cash-preservation rules still take precedence.
+6. `predictive_audit.py` updates only the latest history row with diagnostics after the live decision has already been made.
 
-## Temel davranış
+## What gets measured automatically
+- 5-day probability of broad cross-asset loss.
+- Conditional expected 5-day median asset return.
+- 20-day probability that at least one available risk sleeve exceeds the opportunity threshold.
+- Conditional expected 20-day top-sleeve return.
+- Trend-deterioration score.
+- Sample size and calibration confidence.
 
-Normal koşullarda sermaye, risk-ayarlı fırsat skorlarına göre beş risk varlığına dağıtılır ve nakit kalan risk bütçesini temsil eder.
-
-Aynı anda birçok risk varlığı düşüyor, aralarındaki korelasyon yükseliyor ve VIX/likidite koşulları bozuluyorsa `CAPITAL_PRESERVATION_*` modu devreye girer ve risk bütçesi sert biçimde azaltılır.
-
-Hard stress durumunda toplam risk bütçesi varsayılan olarak `%10` ile sınırlandırılır. Sistem gold'u otomatik olarak "güvenli" kabul etmez; kriz günlerinde nakit gerçek savunma aracıdır.
-
-Olay katmanındaki doğrulanmış petrol olayı toplam riski artırmak zorunda değildir; mevcut risk bütçesi içinde emtiaya öncelik verir.
-
-## Önemli
-
-Araştırma motoru tek bir backtest sonucunu "en iyi strateji" olarak ilan etmez. Pareto önünde yer alan adayları çıkarır. Üretime otomatik terfi yoktur. Gerçek veride yeterli tarih ve out-of-sample walk-forward şarttır.
+Until the warm-up thresholds are reached, the predictive metrics are diagnostic only and do not alter the live allocation.
