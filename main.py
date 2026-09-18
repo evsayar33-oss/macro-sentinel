@@ -25,6 +25,7 @@ import requests
 import yfinance as yf
 
 from regime_engine import MacroRegimeEngine
+from adaptive_strategy_layer import AdaptiveStrategyLayer
 
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 EIA_API_KEY = os.getenv("EIA_API_KEY")
@@ -37,6 +38,7 @@ class UltimateSentinelEngine:
         self.api_key = api_key
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
         self.regime_engine = MacroRegimeEngine()
+        self.strategy_layer = AdaptiveStrategyLayer(self.regime_engine.config)
         data_cfg = self.regime_engine.config.get("data_quality", {})
         self.min_history = int(data_cfg.get("minimum_history_days", 126))
         self.market_stale_days = int(data_cfg.get("market_max_stale_days", 3))
@@ -601,32 +603,35 @@ class UltimateSentinelEngine:
         else:
             regime_status = "Teyit Edildi"
 
-        weights_live = self.regime_engine.get_portfolio_weights(regime_id, regime_subtype, row=latest)
-        # Canonical event snapshot is computed before any emergency override so
-        # all persisted event fields share the same point-in-time source.
-        event_snapshot = self.regime_engine.get_event_snapshot(latest)
-        emergency = regime_id == 2 or float(latest.get("vix", np.nan)) > 35.0
-        if emergency:
-            weights_live = {
-                "cash": 90.0, "gold": 0.0, "bond": 10.0,
-                "equity": 0.0, "commodity": 0.0, "crypto": 0.0,
-                "oil_event_score": float(weights_live.get("oil_event_score", 0.0)),
-                "oil_momentum_score": float(weights_live.get("oil_momentum_score", 0.0)),
-                "oil_structural_score": float(weights_live.get("oil_structural_score", 0.0)),
-                "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
-                "oil_event_active": bool(weights_live.get("oil_event_active", False)),
-                "oil_qualification_reason": str(event_snapshot.get("oil_qualification_reason", "")),
-                "commodity_event_active": False,
-                "commodity_event_reason": "Emergency liquidity override active.",
-                "unknown_event_score": float(weights_live.get("unknown_event_score", 0.0)),
-                "unknown_event_active": bool(weights_live.get("unknown_event_active", False)),
-            }
-        else:
-            weights_live = self.regime_engine._normalize_weights(weights_live)
+        # Production allocation is owned by the V3 adaptive cross-asset layer.
+        # The macro engine still owns regime/event detection; the strategy layer
+        # converts those signals into a risk budget, asset selection, and cash
+        # preservation decision.
+        strategy_result = self.strategy_layer.allocate(
+            prepared_df=prepared,
+            classified_df=classified,
+            history=history,
+        )
+        weights_live = dict(strategy_result["weights"])
 
-        # Re-apply canonical event metadata after all allocation/normalization
-        # operations. This prevents any stale or partially normalized field from
-        # disagreeing with the actual event state.
+        # Canonical event snapshot is computed from the same point-in-time row.
+        # Event metadata is never used as the allocation source of truth; the
+        # adaptive strategy decides the risk budget and whether an overlay is
+        # actually permitted.
+        event_snapshot = self.regime_engine.get_event_snapshot(latest)
+        emergency = bool(regime_id == 2)
+        if emergency:
+            # Preserve the existing macro hard-liquidity emergency contract.
+            weights_live = {
+                "cash": 95.0, "gold": 0.0, "bond": 5.0,
+                "equity": 0.0, "commodity": 0.0, "crypto": 0.0,
+            }
+
+        weights_live = self.regime_engine._normalize_weights(weights_live)
+
+        # Re-apply canonical event metadata after allocation. Strategy metadata
+        # is persisted separately so pressure, confirmed event, and allocation
+        # overlay cannot be conflated.
         weights_live.update({
             "oil_pressure_score": float(event_snapshot.get("oil_pressure_score", 0.0)),
             "oil_event_score": float(event_snapshot.get("oil_event_score", 0.0)),
@@ -636,6 +641,12 @@ class UltimateSentinelEngine:
             "oil_momentum_confirmed": bool(event_snapshot.get("oil_momentum_confirmed", False)),
             "oil_event_type": str(event_snapshot.get("oil_event_type", "NONE")),
             "oil_event_active": bool(event_snapshot.get("oil_event_active", False)),
+            "oil_qualification_reason": str(event_snapshot.get("oil_qualification_reason", "")),
+            "commodity_event_active": bool(strategy_result.get("oil_allocation_overlay", False)),
+            "commodity_event_reason": str(strategy_result.get("oil_allocation_reason", "No confirmed oil allocation overlay.")),
+            "unknown_event_score": float(event_snapshot.get("unknown_event_score", 0.0)),
+            "unknown_event_active": bool(event_snapshot.get("unknown_event_active", False)),
+            "unknown_guard_active": bool(strategy_result.get("unknown_guard_active", False)),
         })
 
         ml_confidence = int(np.clip(70.0 + float(np.nan_to_num(cms)) * 12.0, 20.0, 95.0))
@@ -653,6 +664,33 @@ class UltimateSentinelEngine:
             history=history,
             extra={
                 "emergency": bool(emergency),
+                "strategy_mode": str(strategy_result.get("strategy_mode", "ADAPTIVE_STRATEGY_LAYER_V3")),
+                "strategy_risk_budget_base": round(float(strategy_result.get("risk_budget_base", 0.0)), 4),
+                "strategy_risk_budget_final": round(float(strategy_result.get("risk_budget_final", 0.0)), 4),
+                "strategy_deploy_risk": round(float(strategy_result.get("risk_budget_final", 0.0)), 4),
+                "strategy_vol_scale": round(float(strategy_result.get("vol_scale", 1.0)), 4),
+                "strategy_opportunity_score": round(float(strategy_result.get("opportunity_score", 0.0)), 4),
+                "strategy_stress_score": round(float(strategy_result.get("stress_score", 0.0)), 4),
+                "strategy_stress_broad": bool(strategy_result.get("stress_broad", False)),
+                "strategy_stress_hard": bool(strategy_result.get("stress_hard", False)),
+                "strategy_stress_negative_breadth": round(float(strategy_result.get("stress_negative_breadth", 0.0)), 4),
+                "strategy_stress_median_return_20d": round(float(strategy_result.get("stress_median_return_20d", 0.0)), 4),
+                "strategy_stress_avg_corr_40d": round(float(strategy_result.get("stress_avg_corr_40d", 0.0)), 4),
+                "strategy_stress_vix_percentile": round(float(strategy_result.get("stress_vix_percentile", 50.0)), 2),
+                "strategy_stress_ndl_z": round(float(strategy_result.get("stress_ndl_z", 0.0)), 2),
+                "strategy_recovery_ready": bool(strategy_result.get("stress_recovery_ready", True)),
+                "strategy_cash_floor": round(float(strategy_result.get("cash_floor", 0.0)), 4),
+                "strategy_unknown_guard": bool(strategy_result.get("unknown_guard_active", False)),
+                "strategy_stress_reason": str(strategy_result.get("stress_reason", "")),
+                "strategy_oil_allocation_overlay": bool(strategy_result.get("oil_allocation_overlay", False)),
+                "strategy_oil_allocation_reason": str(strategy_result.get("oil_allocation_reason", "")),
+                "strategy_asset_score_equity": round(float(strategy_result.get("asset_scores", {}).get("equity", 0.0)), 4),
+                "strategy_asset_score_gold": round(float(strategy_result.get("asset_scores", {}).get("gold", 0.0)), 4),
+                "strategy_asset_score_bond": round(float(strategy_result.get("asset_scores", {}).get("bond", 0.0)), 4),
+                "strategy_asset_score_commodity": round(float(strategy_result.get("asset_scores", {}).get("commodity", 0.0)), 4),
+                "strategy_asset_score_crypto": round(float(strategy_result.get("asset_scores", {}).get("crypto", 0.0)), 4),
+                "strategy_available_asset_count": int(strategy_result.get("available_asset_count", 0)),
+                "strategy_decision_reason": str(strategy_result.get("decision_reason", "")),
                 "cms": round(float(np.nan_to_num(cms)), 4),
                 "ndl": round(float(ndl_s.iloc[-1]), 0),
                 "active_growth_name": active_growth_name,
@@ -661,6 +699,11 @@ class UltimateSentinelEngine:
                 "oil_price": round(float(y_data["CL=F"].iloc[-1]), 4),
                 "brent_price": round(float(y_data["BZ=F"].iloc[-1]), 4) if pd.notna(y_data["BZ=F"].iloc[-1]) else np.nan,
                 "spx_price": round(float(y_data["ES=F"].iloc[-1]), 4),
+                "gold_price": round(float(y_data["GC=F"].iloc[-1]), 4),
+                "copper_price": round(float(y_data["HG=F"].iloc[-1]), 4) if pd.notna(y_data["HG=F"].iloc[-1]) else np.nan,
+                "silver_price": round(float(y_data["SI=F"].iloc[-1]), 4) if pd.notna(y_data["SI=F"].iloc[-1]) else np.nan,
+                "btc_price": round(float(y_data["BTC-USD"].iloc[-1]), 4) if "BTC-USD" in y_data.columns and pd.notna(y_data["BTC-USD"].iloc[-1]) else np.nan,
+                "ust10y_yield": round(float(raw["dgs10"].iloc[-1]), 4) if not raw["dgs10"].empty and pd.notna(raw["dgs10"].iloc[-1]) else np.nan,
                 "real_rate": round(float(tips_s.iloc[-1]), 2),
                 "pmi_z": round(float(pmi_z), 2),
                 "yield_curve": round(float(yc_val), 2),
@@ -760,6 +803,33 @@ class UltimateSentinelEngine:
             "allocation_source": source,
             "previous_valid_date": previous_date,
             "emergency": False,
+            "strategy_mode": "ADAPTIVE_STRATEGY_LAYER_V3",
+            "strategy_risk_budget_base": 0.0,
+            "strategy_risk_budget_final": 0.0,
+            "strategy_deploy_risk": 0.0,
+            "strategy_vol_scale": 1.0,
+            "strategy_opportunity_score": 0.0,
+            "strategy_stress_score": 0.0,
+            "strategy_stress_broad": False,
+            "strategy_stress_hard": False,
+            "strategy_stress_negative_breadth": 0.0,
+            "strategy_stress_median_return_20d": 0.0,
+            "strategy_stress_avg_corr_40d": 0.0,
+            "strategy_stress_vix_percentile": 50.0,
+            "strategy_stress_ndl_z": 0.0,
+            "strategy_recovery_ready": True,
+            "strategy_cash_floor": 0.0,
+            "strategy_unknown_guard": False,
+            "strategy_stress_reason": "",
+            "strategy_oil_allocation_overlay": False,
+            "strategy_oil_allocation_reason": "",
+            "strategy_asset_score_equity": 0.0,
+            "strategy_asset_score_gold": 0.0,
+            "strategy_asset_score_bond": 0.0,
+            "strategy_asset_score_commodity": 0.0,
+            "strategy_asset_score_crypto": 0.0,
+            "strategy_available_asset_count": 0,
+            "strategy_decision_reason": "",
             "cms": 0.0,
             "ndl": 0.0,
             "g3_liq": np.nan,
@@ -767,6 +837,11 @@ class UltimateSentinelEngine:
             "oil_price": np.nan,
             "brent_price": np.nan,
             "spx_price": np.nan,
+            "gold_price": np.nan,
+            "copper_price": np.nan,
+            "silver_price": np.nan,
+            "btc_price": np.nan,
+            "ust10y_yield": np.nan,
             "copper_gold": 0.0,
             "vix": 0.0,
             "real_rate": 0.0,

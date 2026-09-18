@@ -39,46 +39,62 @@ def load_history(path: str) -> pd.DataFrame:
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df = df.sort_values("date").drop_duplicates("date").set_index("date")
+
+    # Macro Sentinel persists point-in-time prices under explicit *_price names.
+    # Map them into the strategy layer's canonical fields without inventing data.
+    aliases = {
+        "spx": "spx_price",
+        "gold": "gold_price",
+        "ust10y": "ust10y_yield",
+        "oil": "oil_price",
+        "brent": "brent_price",
+        "copper": "copper_price",
+        "silver": "silver_price",
+        "btc": "btc_price",
+    }
+    for target, source in aliases.items():
+        if target not in df.columns and source in df.columns:
+            df[target] = pd.to_numeric(df[source], errors="coerce")
+    if "confirmed_regime_id" not in df.columns and "regime_id" in df.columns:
+        df["confirmed_regime_id"] = pd.to_numeric(df["regime_id"], errors="coerce").fillna(0)
     return df
 
 
-def portfolio_returns(df: pd.DataFrame, layer: AdaptiveStrategyLayer) -> pd.Series:
+def portfolio_returns(df: pd.DataFrame, layer: AdaptiveStrategyLayer, rebalance_step: int = 5) -> pd.Series:
+    """Evaluate strategy returns with a bounded rebalancing cadence.
+
+    A 5-session rebalance prevents the research utility from recomputing large
+    rolling windows at every single bar and keeps the research process tractable.
+    Allocation at t applies to the next available session(s) until the next rebalance.
+    """
     ret = layer._build_asset_returns(df)
-    scores = layer._asset_score_series(ret)
     rows = []
     dates = []
-    for i in range(len(df)):
-        if i < 126:
-            continue
-        sub = df.iloc[: i + 1]
-        sub_scores = scores.iloc[: i + 1]
+    window = 180
+    step = max(1, int(rebalance_step))
+    for i in range(126, len(df) - 1, step):
+        start = max(0, i + 1 - window)
+        sub = df.iloc[start:i + 1]
         row = sub.iloc[-1]
-        # Build a one-row classified view without lookahead. All allocation
-        # features are derived from sub-history ending at i.
-        alloc = layer.allocate(sub, history=None)
+        classified = pd.DataFrame([{
+            "confirmed_regime_id": int(float(row.get("confirmed_regime_id", 0) or 0)),
+            "oil_event_active": row.get("oil_event_active", False),
+            "oil_pressure_score": row.get("oil_pressure_score", 0.0),
+            "unknown_event_active": row.get("unknown_event_active", False),
+        }], index=[sub.index[-1]])
+        history_tail = df.iloc[max(0, start - 5):i]
+        alloc = layer.allocate(sub, classified_df=classified, history=history_tail)
         w = alloc["weights"]
-        if i + 1 < len(df):
-            r = ret.iloc[i + 1]
-            # Allocation at t earns next available observation t+1. This is a
-            # conservative close-to-close research convention.
-            parts = {
-                "equity": r.get("equity", np.nan),
-                "gold": r.get("gold", np.nan),
-                "bond": r.get("bond", np.nan),
-                "commodity": r.get("commodity", np.nan),
-                "crypto": r.get("crypto", np.nan),
-            }
+
+        for j in range(i + 1, min(i + 1 + step, len(df))):
+            r = ret.iloc[j]
             pr = 0.0
-            covered = 0.0
-            for k, rv in parts.items():
+            for k in ("equity", "gold", "bond", "commodity", "crypto"):
+                rv = r.get(k, np.nan)
                 if np.isfinite(rv):
                     pr += (w[k] / 100.0) * rv
-                    covered += w[k] / 100.0
-            # Missing assets do not earn phantom return; residual is treated as cash.
-            if covered < 1.0:
-                covered = min(covered, 1.0)
             rows.append(pr)
-            dates.append(df.index[i + 1])
+            dates.append(df.index[j])
     return pd.Series(rows, index=dates, dtype=float)
 
 
@@ -147,7 +163,7 @@ def walk_forward_score(df: pd.DataFrame, params: Dict[str, float], n_splits: int
             continue
         # Strategy is re-run from the start of the sample, but we score only the
         # fold's forward period. This prevents using future fold observations.
-        r = portfolio_returns(df.iloc[:test_end], layer)
+        r = portfolio_returns(df.iloc[:test_end], layer, rebalance_step=5)
         r = r[r.index > df.index[train_end - 1]]
         if len(r) < 30:
             continue
@@ -200,6 +216,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--history", default="cms_history.csv")
     ap.add_argument("--out", default="strategy_research_results.json")
+    ap.add_argument("--rebalance-step", type=int, default=5, help="Rebalance every N observations for research speed.")
     args = ap.parse_args()
 
     df = load_history(args.history)
@@ -220,11 +237,13 @@ def main() -> None:
 
     results = []
     for params in parameter_grid():
-        results.append(walk_forward_score(df, params))
+        result = walk_forward_score(df, params, n_splits=4)
+        results.append(result)
     frontier = pareto_frontier(results)
     payload = {
         "status": "RESEARCH_ONLY",
         "method": "walk_forward_pareto_search",
+        "rebalance_step": 5,
         "observations": len(df),
         "candidate_count": len(results),
         "pareto_candidate_count": len(frontier),

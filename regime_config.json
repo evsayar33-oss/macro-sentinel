@@ -1,7 +1,7 @@
 {
   "system_architecture": {
     "module_name": "macro-event-interpretation-system",
-    "version": "2.4",
+    "version": "3.0",
     "principles": {
       "mutual_exclusivity": true,
       "active_regime_count": 1,
@@ -18,7 +18,9 @@
       "market_closed_hold": true,
       "single_source_of_truth_for_allocation": "regime_config.json",
       "switch_confirmation_observations": 2,
-      "allocation_source_of_truth": "regimes[].default_allocation"
+      "allocation_source_of_truth": "regimes[].default_allocation",
+      "production_strategy_layer": "adaptive_strategy_layer_v3",
+      "capital_preservation_governor": true
     }
   },
   "priority_rules": {
@@ -556,11 +558,12 @@
     "allocation_source": "regimes[].default_allocation",
     "event_score_semantics": "confirmed_only",
     "pressure_score_separate": true,
-    "schema_version": "2.4"
+    "schema_version": "3.0",
+    "production_strategy_source": "adaptive_strategy_layer_v3"
   },
   "research_strategies": {
     "enabled": true,
-    "auto_deploy": false,
+    "auto_deploy": true,
     "purpose": "Return-seeking research candidates; never replace live allocation without real-data walk-forward validation.",
     "default_candidate": "adaptive_opportunity_btc",
     "synthetic_evaluation_seeds": [
@@ -594,7 +597,7 @@
       "crypto": 0.1
     },
     "live_adoption_rule": "bounded_adaptive_opportunity_v1; requires real-market walk-forward before treating research metrics as validated",
-    "live_use_adaptive_opportunity": true,
+    "live_use_adaptive_opportunity": false,
     "production_enable_btc": true,
     "production_risk_budget_by_regime": {
       "0": 0.6,
@@ -629,9 +632,95 @@
       "4": 0.25,
       "5": 0.05
     },
-    "production_candidate": "adaptive_opportunity_btc",
+    "production_candidate": "adaptive_strategy_layer_v3",
     "auto_parameter_mutation": false,
-    "production_validation_note": "Live engine uses the bounded adaptive-opportunity architecture; candidate parameters are fixed by config and are not auto-optimized from future outcomes."
+    "production_validation_note": "Live engine uses the bounded adaptive-opportunity architecture; candidate parameters are fixed by config and are not auto-optimized from future outcomes.",
+    "production_strategy_layer": "adaptive_strategy_layer_v3",
+    "adaptive_layer": {
+      "enabled": true,
+      "target_annual_vol": 0.085,
+      "max_risk_budget": 0.92,
+      "min_risk_budget": 0.05,
+      "softmax_temperature": 1.05,
+      "score_floor": 0.1,
+      "risk_budget_by_regime": {
+        "0": 0.6,
+        "1": 0.35,
+        "2": 0.08,
+        "3": 0.45,
+        "4": 0.25,
+        "5": 0.82
+      },
+      "min_cash_by_regime": {
+        "0": 0.1,
+        "1": 0.15,
+        "2": 0.8,
+        "3": 0.2,
+        "4": 0.25,
+        "5": 0.05
+      },
+      "asset_max_weights": {
+        "equity": 0.45,
+        "gold": 0.25,
+        "bond": 0.3,
+        "commodity": 0.3,
+        "crypto": 0.15
+      },
+      "score_weights": {
+        "momentum_20d": 0.26,
+        "momentum_60d": 0.28,
+        "trend_100d": 0.2,
+        "drawdown_quality": 0.14,
+        "volatility_quality": 0.12
+      },
+      "stress": {
+        "broad_negative_breadth": 0.6,
+        "hard_negative_breadth": 0.8,
+        "broad_median_return_20d": -0.02,
+        "hard_median_return_20d": -0.05,
+        "broad_corr": 0.45,
+        "hard_corr": 0.6,
+        "broad_vix_pct": 60.0,
+        "hard_vix_pct": 80.0,
+        "broad_ndl_z": -0.25,
+        "hard_ndl_z": -0.8,
+        "hard_risk_cap": 0.08,
+        "broad_risk_cap": 0.25,
+        "broad_risk_multiplier": 0.55,
+        "recent_stress_days": 5,
+        "recovery_required_days": 3,
+        "reentry_risk_cap": 0.35,
+        "hard_cash_floor": 0.9,
+        "broad_cash_floor": 0.65
+      },
+      "opportunity": {
+        "top_n": 3,
+        "high_score": 0.72,
+        "minimum_score": 0.45,
+        "strong_breadth_count": 3,
+        "positive_20d_adjustment": 0.08,
+        "weak_opportunity_penalty": 0.08,
+        "strong_opportunity_bonus": 0.05
+      },
+      "confirmed_oil_event": {
+        "commodity_sleeve_boost": 0.1,
+        "max_commodity": 0.3,
+        "do_not_boost_during_hard_stress": true,
+        "do_not_boost_pressure_only": true
+      },
+      "unknown_event": {
+        "risk_cap": 0.25,
+        "min_cash": 0.5
+      },
+      "reentry": {
+        "require_clean_observations": 3,
+        "minimum_positive_breadth": 0.6,
+        "risk_cap_until_recovered": 0.35
+      },
+      "no_leverage": true,
+      "production_source_of_truth": "adaptive_strategy_layer_v3"
+    },
+    "description": "Production uses bounded adaptive cross-asset allocation with capital-preservation governor. Daily audit is diagnostic; no unvalidated parameter mutation."
   },
   "research_strategy_metrics_single_seed": {
     "Macro Sentinel Dynamic": {

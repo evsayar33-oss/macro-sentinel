@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Macro Sentinel v2.6",
+    page_title="Macro Sentinel v3.0",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -161,7 +161,7 @@ elif regime_type == "CONSTRAINT":
 else:
     hero_color = "#ffd600"
 
-st.title("🏛️ Macro Sentinel")
+st.title("🏛️ Macro Sentinel V3")
 st.caption("Point-in-time makro rejim + bağımsız olay sensörleri + fail-closed allocation")
 
 st.markdown(
@@ -263,6 +263,32 @@ if unknown_active:
         f"⚠️ Tanımlanmamış anomali sensörü aktif (skor {unknown_score:.2f}). "
         "Sistem yön tahmini uydurmak yerine risk azaltıcı guard uygulayabilir."
     )
+
+st.subheader("🛡️ Strateji / Sermaye Koruma Motoru")
+sg1, sg2, sg3, sg4 = st.columns(4)
+with sg1:
+    st.metric("Risk Bütçesi", ratio_pct(fnum(latest, "strategy_risk_budget_final", 0.0)))
+with sg2:
+    st.metric("Fırsat Skoru", f"{fnum(latest, 'strategy_opportunity_score', 0.0):.2f}")
+with sg3:
+    st.metric("Stres Skoru", f"{fnum(latest, 'strategy_stress_score', 0.0):.2f}")
+with sg4:
+    stress_mode = "HARD" if bval(latest, "strategy_stress_hard") else "BROAD" if bval(latest, "strategy_stress_broad") else "NORMAL"
+    st.metric("Sermaye Koruma", stress_mode)
+
+st.caption(
+    f"Strateji durumu: {text_or(latest, 'strategy_mode', 'ADAPTIVE_STRATEGY_LAYER_V3')} · "
+    f"Stres: {text_or(latest, 'strategy_stress_reason', 'Belirlenmedi')}"
+)
+
+score_rows = [
+    ["Hisse", f"{fnum(latest, 'strategy_asset_score_equity', np.nan):.2f}"],
+    ["Altın", f"{fnum(latest, 'strategy_asset_score_gold', np.nan):.2f}"],
+    ["Tahvil", f"{fnum(latest, 'strategy_asset_score_bond', np.nan):.2f}"],
+    ["Emtia", f"{fnum(latest, 'strategy_asset_score_commodity', np.nan):.2f}"],
+    ["Kripto", f"{fnum(latest, 'strategy_asset_score_crypto', np.nan):.2f}"],
+]
+st.dataframe(pd.DataFrame(score_rows, columns=["Varlık", "Fırsat Skoru"]), use_container_width=True, hide_index=True)
 
 hc1, hc2, hc3 = st.columns(3)
 with hc1:

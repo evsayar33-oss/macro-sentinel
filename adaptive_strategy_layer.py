@@ -136,8 +136,8 @@ class AdaptiveStrategyLayer:
     def _build_asset_returns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Construct daily returns for the five investable risk sleeves."""
         out = pd.DataFrame(index=df.index)
-        out["equity"] = self._safe_series(df, "spx").pct_change()
-        out["gold"] = self._safe_series(df, "gold").pct_change()
+        out["equity"] = self._safe_series(df, "spx").pct_change(fill_method=None)
+        out["gold"] = self._safe_series(df, "gold").pct_change(fill_method=None)
         out["bond"] = self._bond_returns(self._safe_series(df, "ust10y"))
         
         # Commodity is a breadth-aware composite. We average available
@@ -145,7 +145,7 @@ class AdaptiveStrategyLayer:
         # its nominal volatility is larger than copper/silver.
         commodity_parts = []
         for col in ("oil", "brent", "copper", "silver"):
-            s = self._safe_series(df, col).pct_change()
+            s = self._safe_series(df, col).pct_change(fill_method=None)
             if s.notna().sum() >= 30:
                 commodity_parts.append(s.rename(col))
         if commodity_parts:
@@ -157,38 +157,54 @@ class AdaptiveStrategyLayer:
             out["commodity"] = weighted / denom.replace(0.0, np.nan)
         else:
             out["commodity"] = np.nan
-        out["crypto"] = self._safe_series(df, "btc").pct_change()
+        out["crypto"] = self._safe_series(df, "btc").pct_change(fill_method=None)
         return out
 
+    def _asset_availability(self, returns: pd.DataFrame) -> Dict[str, bool]:
+        """Require enough recent observations before an asset can receive risk."""
+        availability = {}
+        for asset in ASSET_KEYS:
+            s = pd.to_numeric(returns.get(asset), errors="coerce") if asset in returns.columns else pd.Series(dtype=float)
+            recent = s.tail(90).dropna()
+            availability[asset] = bool(len(recent) >= 30)
+        return availability
+
     def _asset_score_series(self, returns: pd.DataFrame) -> pd.DataFrame:
-        """Return 0..1 opportunity scores for each asset using only trailing data."""
+        """Return 0..1 opportunity scores using trailing data only.
+
+        An unavailable asset receives a near-zero score instead of a neutral
+        score; this prevents missing data from silently creating exposure.
+        """
         scores = pd.DataFrame(index=returns.index, columns=ASSET_KEYS, dtype=float)
         for asset in ASSET_KEYS:
-            r = pd.to_numeric(returns[asset], errors="coerce")
+            r = pd.to_numeric(returns[asset], errors="coerce") if asset in returns.columns else pd.Series(np.nan, index=returns.index)
+            valid_recent = int(r.tail(90).notna().sum())
+            if valid_recent < 30:
+                scores[asset] = 0.02
+                continue
+
             r20 = r.rolling(20, min_periods=10).sum()
             r60 = r.rolling(60, min_periods=30).sum()
             r100 = r.rolling(100, min_periods=50).sum()
             vol20 = r.rolling(20, min_periods=10).std() * np.sqrt(252.0)
             vol60 = r.rolling(60, min_periods=30).std() * np.sqrt(252.0)
 
-            # Risk-adjusted trailing momentum.
             q20 = np.tanh(r20 / (vol20 * np.sqrt(20.0 / 252.0) + 1e-9))
             q60 = np.tanh(r60 / (vol60 * np.sqrt(60.0 / 252.0) + 1e-9))
-
-            # Long-horizon trend and drawdown quality.
             trend = np.tanh(r100 / (vol60 * np.sqrt(100.0 / 252.0) + 1e-9))
+
             eq_curve = (1.0 + r.fillna(0.0)).cumprod()
             rolling_peak = eq_curve.rolling(126, min_periods=30).max()
             dd = eq_curve / (rolling_peak + 1e-9) - 1.0
             dd_quality = np.clip(1.0 + dd, 0.0, 1.0)
-
             vol_quality = 1.0 - np.clip((vol20 - 0.10) / 0.45, 0.0, 1.0)
+
             raw = (
-                0.30 * (q20 + 1.0) / 2.0
-                + 0.30 * (q60 + 1.0) / 2.0
+                0.26 * (q20 + 1.0) / 2.0
+                + 0.28 * (q60 + 1.0) / 2.0
                 + 0.20 * (trend + 1.0) / 2.0
-                + 0.10 * dd_quality
-                + 0.10 * vol_quality
+                + 0.14 * dd_quality
+                + 0.12 * vol_quality
             )
             scores[asset] = raw.clip(0.0, 1.0)
         return scores
@@ -367,17 +383,49 @@ class AdaptiveStrategyLayer:
         return weights
 
     def _vol_scale(self, risk_weights: Dict[str, float], returns: pd.DataFrame) -> float:
-        """Return multiplier <= 1 to keep forecast annualized vol under target."""
-        cols = [a for a in ASSET_KEYS if a in returns.columns]
-        sample = returns[cols].tail(60).dropna(how="all")
+        """Scale risk <=1 using a conservative trailing covariance estimate."""
+        cols = [a for a in ASSET_KEYS if a in returns.columns and risk_weights.get(a, 0.0) > 0]
+        if len(cols) < 2:
+            return 1.0
+        sample = returns[cols].tail(60)
         if sample.shape[0] < 25:
             return 1.0
-        cov = sample.cov().values * 252.0
+        cov_df = sample.cov(min_periods=20) * 252.0
+        cov_df = cov_df.reindex(index=cols, columns=cols)
+        variances = sample.var().mul(252.0)
+        cov_df = cov_df.fillna(0.0)
+        for col in cols:
+            if not np.isfinite(cov_df.loc[col, col]) or cov_df.loc[col, col] <= 0:
+                v = float(variances.get(col, 0.0))
+                cov_df.loc[col, col] = v if np.isfinite(v) and v > 0 else 0.01
+        cov = cov_df.values
         w = np.array([risk_weights.get(a, 0.0) for a in cols], dtype=float)
         vol = float(np.sqrt(max(w @ cov @ w, 0.0)))
         if not np.isfinite(vol) or vol <= self.target_vol:
             return 1.0
         return float(np.clip(self.target_vol / vol, 0.0, 1.0))
+
+    @staticmethod
+    def _prior_stress_state(history: Optional[pd.DataFrame], required_clean: int) -> Tuple[bool, int]:
+        """Determine whether a recent stress episode is still blocking full re-entry."""
+        if history is None or history.empty:
+            return False, 0
+        cols = [c for c in ("strategy_stress_broad", "strategy_stress_hard") if c in history.columns]
+        if not cols:
+            return False, 0
+        tail = history.tail(max(required_clean, 1))
+        stress_flags = []
+        for _, row in tail.iterrows():
+            broad = str(row.get("strategy_stress_broad", False)).strip().lower() in {"1", "true", "yes", "on"}
+            hard = str(row.get("strategy_stress_hard", False)).strip().lower() in {"1", "true", "yes", "on"}
+            stress_flags.append(broad or hard)
+        consecutive_clean = 0
+        for flag in reversed(stress_flags):
+            if flag:
+                break
+            consecutive_clean += 1
+        recently_stressed = any(stress_flags)
+        return recently_stressed, consecutive_clean
 
     def allocate(
         self,
@@ -385,12 +433,26 @@ class AdaptiveStrategyLayer:
         classified_df: Optional[pd.DataFrame] = None,
         history: Optional[pd.DataFrame] = None,
     ) -> Dict[str, Any]:
-        """Generate final production weights and diagnostic metadata."""
+        """Generate final production weights and diagnostics.
+
+        The strategy is explicitly allowed to move overwhelmingly into cash
+        during synchronized asset losses. Re-entry is staged rather than a
+        one-day switch to avoid whipsaw.
+        """
         if prepared_df is None or prepared_df.empty:
             return {
                 "weights": {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0},
                 "strategy_mode": "CAPITAL_PRESERVATION_NO_DATA",
                 "decision_reason": "No prepared data available.",
+                "risk_budget_base": 0.0, "risk_budget_final": 0.0,
+                "vol_scale": 0.0, "opportunity_score": 0.0, "asset_scores": {},
+                "stress_score": 1.0, "stress_broad": True, "stress_hard": True,
+                "stress_negative_breadth": 1.0, "stress_median_return_20d": -1.0,
+                "stress_avg_corr_40d": 0.0, "stress_vix_percentile": 100.0, "stress_ndl_z": -5.0,
+                "stress_recovery_ready": False, "cash_floor": 1.0,
+                "unknown_guard_active": True, "oil_allocation_overlay": False,
+                "oil_allocation_reason": "No data; risk not deployed.",
+                "stress_reason": "No prepared data available; capital preservation first.",
             }
 
         df = prepared_df.copy().sort_index()
@@ -399,76 +461,116 @@ class AdaptiveStrategyLayer:
         regime_id = int(self._num(decision_row.get("confirmed_regime_id"), self._num(market_row.get("confirmed_regime_id"), 0)))
 
         returns = self._build_asset_returns(df)
+        availability = self._asset_availability(returns)
         scores = self._asset_score_series(returns)
-        latest_scores = {
-            a: self._clip01(self._num(scores.iloc[-1].get(a), 0.50)) for a in ASSET_KEYS
-        }
+        latest_scores = {}
+        for a in ASSET_KEYS:
+            default = 0.02 if not availability.get(a, False) else 0.50
+            latest_scores[a] = self._clip01(self._num(scores.iloc[-1].get(a), default))
+            if not availability.get(a, False):
+                latest_scores[a] = 0.02
+
         stress = self._stress_state(df, returns)
         base_risk = self._base_risk_budget(regime_id)
         risk_budget, risk_meta = self._adjust_risk_budget(base_risk, stress, latest_scores, regime_id, decision_row)
-        sleeve = self._dynamic_risk_weights(latest_scores)
 
-        # Confirmed oil event can raise the commodity sleeve's relative priority,
-        # but does not create additional total portfolio risk by itself.
+        # If fewer than four risk sleeves have enough recent data, the engine cannot
+        # prove a full cross-asset condition. Reduce risk rather than pretending coverage.
+        available_count = sum(1 for a in ASSET_KEYS if availability.get(a, False))
+        if available_count < 4:
+            risk_budget = min(risk_budget, 0.35)
+
+        sleeve = self._dynamic_risk_weights(latest_scores)
         oil_active = str(decision_row.get("oil_event_active", False)).strip().lower() in {"1", "true", "yes", "on"}
         oil_pressure = self._num(decision_row.get("oil_pressure_score"), 0.0)
-        if oil_active:
+        oil_type = str(decision_row.get("oil_event_type", "NONE")).upper()
+        oil_allocation_overlay = False
+        oil_allocation_reason = "No confirmed oil allocation overlay."
+
+        # Pressure-only is intentionally informational. Only a confirmed oil event
+        # changes commodity priority, and never during a hard synchronized selloff.
+        if oil_active and oil_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"} and not stress.hard_stress:
             sleeve["commodity"] = min(self.max_asset_weights["commodity"], sleeve["commodity"] + 0.10)
-            # Re-normalize sleeve after commodity preference boost.
             total = sum(sleeve.values())
             sleeve = {k: v / total for k, v in sleeve.items()}
+            oil_allocation_overlay = True
+            oil_allocation_reason = f"Confirmed oil event ({oil_type}); commodity priority raised inside existing risk budget."
         elif oil_pressure >= 0.20:
-            sleeve["commodity"] = min(self.max_asset_weights["commodity"], sleeve["commodity"] + 0.04)
-            total = sum(sleeve.values())
-            sleeve = {k: v / total for k, v in sleeve.items()}
+            oil_allocation_reason = "Oil pressure monitored only; confirmed-event gate not met, so no oil-specific allocation boost."
 
         vol_scale = self._vol_scale(sleeve, returns)
         deploy_risk = risk_budget * vol_scale
         cash_floor = self._min_cash(regime_id)
 
-        # Capital-preservation governor: all-risk-assets-down can force cash even
-        # when an individual asset's score still looks attractive.
+        # Strong synchronized stress is the highest-priority capital-preservation
+        # rule. It can override otherwise attractive asset scores.
         if stress.hard_stress:
             deploy_risk = min(deploy_risk, self.stress["hard_risk_cap"])
+            cash_floor = max(cash_floor, self.stress.get("hard_cash_floor", 0.90))
         elif stress.broad_stress:
-            deploy_risk = min(deploy_risk, 0.25)
+            deploy_risk = min(deploy_risk, self.stress.get("broad_risk_cap", 0.25))
+            cash_floor = max(cash_floor, self.stress.get("broad_cash_floor", 0.65))
 
-        # If there are no compelling opportunities, do not force exposure merely
-        # to avoid cash drag.
-        opportunity = float(np.mean(sorted(latest_scores.values(), reverse=True)[:3]))
-        if opportunity < 0.50:
-            deploy_risk = min(deploy_risk, 0.55)
-        elif opportunity > 0.70 and not stress.broad_stress:
-            deploy_risk = min(self.max_risk_budget, deploy_risk + 0.05)
+        unknown_guard_active = str(decision_row.get("unknown_event_active", False)).strip().lower() in {"1", "true", "yes", "on"}
+        if unknown_guard_active:
+            deploy_risk = min(deploy_risk, float(self.cfg.get("unknown_event", {}).get("risk_cap", 0.25)))
+            cash_floor = max(cash_floor, float(self.cfg.get("unknown_event", {}).get("min_cash", 0.50)))
 
+        # Opportunity gate: do not deploy risk merely because a regime budget exists.
+        available_scores = [v for a, v in latest_scores.items() if availability.get(a, False)]
+        top_n = int(self.cfg.get("opportunity", {}).get("top_n", 3))
+        opportunity = float(np.mean(sorted(available_scores, reverse=True)[:top_n])) if available_scores else 0.0
+        high_score = float(self.cfg.get("opportunity", {}).get("high_score", 0.72))
+        min_score = float(self.cfg.get("opportunity", {}).get("minimum_score", 0.45))
+        if opportunity < min_score:
+            deploy_risk = min(deploy_risk, 0.45)
+        elif opportunity >= high_score and not stress.broad_stress:
+            deploy_risk = min(self.max_risk_budget, deploy_risk + float(self.cfg.get("opportunity", {}).get("strong_opportunity_bonus", 0.05)))
+
+        # Staged re-entry after a stress episode. The system does not jump from
+        # cash to full risk after a single green day.
+        reentry_cfg = self.cfg.get("reentry", {})
+        required_clean = int(reentry_cfg.get("require_clean_observations", self.stress.get("recovery_required_days", 3)))
+        prior_stressed, clean_count = self._prior_stress_state(history, required_clean)
+        recovery_ready = stress.recovery_ready and (not prior_stressed or clean_count >= required_clean)
+        if prior_stressed and clean_count < required_clean and not stress.broad_stress and not stress.hard_stress:
+            deploy_risk = min(deploy_risk, float(reentry_cfg.get("risk_cap_until_recovered", 0.35)))
+        elif not recovery_ready and (stress.broad_stress or stress.hard_stress):
+            deploy_risk = min(deploy_risk, 0.20 if stress.broad_stress else 0.10)
+
+        # Strategy V3 never uses leverage and never lets cash fall below its floor.
         deploy_risk = float(np.clip(deploy_risk, self.min_risk_budget, self.max_risk_budget))
         if 1.0 - deploy_risk < cash_floor:
             deploy_risk = max(self.min_risk_budget, 1.0 - cash_floor)
 
         weights = {"cash": 1.0 - deploy_risk, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
         for a in ASSET_KEYS:
-            weights[a] = deploy_risk * sleeve[a]
+            weights[a] = deploy_risk * sleeve[a] if availability.get(a, False) else 0.0
 
-        # Preserve a minimum cash floor exactly after floating-point operations.
-        if weights["cash"] < cash_floor:
-            needed = cash_floor - weights["cash"]
-            donor_order = sorted(ASSET_KEYS, key=lambda x: weights[x], reverse=True)
-            for a in donor_order:
-                take = min(needed, weights[a])
-                weights[a] -= take
-                weights["cash"] += take
-                needed -= take
-                if needed <= 1e-12:
-                    break
+        # In hard stress, pin a high-cash state even if numerical floors allowed more risk.
+        if stress.hard_stress:
+            target_cash = max(cash_floor, self.stress.get("hard_cash_floor", 0.90))
+            donor_needed = max(0.0, target_cash - weights["cash"])
+            if donor_needed > 0:
+                for a in sorted(ASSET_KEYS, key=lambda x: weights[x], reverse=True):
+                    take = min(donor_needed, weights[a])
+                    weights[a] -= take
+                    weights["cash"] += take
+                    donor_needed -= take
+                    if donor_needed <= 1e-12:
+                        break
+            oil_allocation_overlay = False
+            oil_allocation_reason = "Hard synchronized cross-asset stress: capital preservation overrides oil allocation preference."
 
         weights = self._normalize(weights)
-
         if stress.hard_stress:
             mode = "CAPITAL_PRESERVATION_HARD_STRESS"
         elif stress.broad_stress:
             mode = "CAPITAL_PRESERVATION_BROAD_STRESS"
+        elif prior_stressed and not recovery_ready:
+            mode = "STAGED_REENTRY"
         else:
-            mode = "ADAPTIVE_RISK_ALLOCATION"
+            mode = "ADAPTIVE_CROSS_ASSET_V3"
 
         return {
             "weights": weights,
@@ -478,6 +580,8 @@ class AdaptiveStrategyLayer:
             "vol_scale": vol_scale,
             "opportunity_score": opportunity,
             "asset_scores": latest_scores,
+            "asset_availability": availability,
+            "available_asset_count": available_count,
             "stress_score": stress.score,
             "stress_broad": stress.broad_stress,
             "stress_hard": stress.hard_stress,
@@ -486,8 +590,16 @@ class AdaptiveStrategyLayer:
             "stress_avg_corr_40d": stress.avg_corr_40d,
             "stress_vix_percentile": stress.vix_percentile,
             "stress_ndl_z": stress.ndl_z,
-            "stress_recovery_ready": stress.recovery_ready,
-            "stress_reason": stress.stress_reason,
+            "stress_recovery_ready": recovery_ready,
             "cash_floor": cash_floor,
-            "oil_event_bias": "CONFIRMED" if oil_active else "PRESSURE_ONLY" if oil_pressure >= 0.20 else "NONE",
+            "unknown_guard_active": unknown_guard_active,
+            "oil_allocation_overlay": oil_allocation_overlay,
+            "oil_allocation_reason": oil_allocation_reason,
+            "stress_reason": stress.stress_reason,
+            "decision_reason": (
+                "Hard synchronized stress: cash governor active." if stress.hard_stress else
+                "Broad cross-asset stress: risk budget compressed." if stress.broad_stress else
+                "Staged re-entry: recent stress episode has not fully cleared." if prior_stressed and not recovery_ready else
+                "Adaptive cross-asset allocation based on opportunity, volatility and macro risk."
+            ),
         }
