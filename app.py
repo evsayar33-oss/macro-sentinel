@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Macro Sentinel v2.1",
+    page_title="Macro Sentinel v2.4",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -117,8 +117,11 @@ weights = {
 allocation_total = sum(v for v in weights.values() if np.isfinite(v))
 
 oil_score = fnum(latest, "oil_event_score", 0.0)
+oil_pressure = fnum(latest, "oil_pressure_score", max(fnum(latest, "oil_momentum_score", 0.0), fnum(latest, "oil_structural_score", 0.0)))
 oil_active = bval(latest, "oil_event_active")
 oil_overlay_applied = bval(latest, "commodity_event_active")
+oil_structural_qualified = bval(latest, "oil_structural_qualified")
+oil_momentum_confirmed = bval(latest, "oil_momentum_confirmed")
 oil_momentum = fnum(latest, "oil_momentum_score", 0.0)
 oil_structural = fnum(latest, "oil_structural_score", 0.0)
 oil_event_type = text_or(latest, "oil_event_type", "NONE")
@@ -141,7 +144,7 @@ elif issues:
     decision_health = "CAUTION" if decision == "LIVE" else decision
     health_color = "warn"
 else:
-    health_label = "🟢 HEALTHY" if health == "HEALTHY" else "🟡 DEGRADED · İKİNCİL VERİ"
+    health_label = "🟢 HEALTHY" if health == "HEALTHY" else "🟡 " + health
     decision_health = "VALID" if decision == "LIVE" else decision
     health_color = "ok" if health == "HEALTHY" else "warn"
 
@@ -209,9 +212,10 @@ for col, (label, value) in zip(metric_cols, metric_values):
 st.subheader("🛢️ Petrol / Yapısal Olay Katmanı")
 oil_col, structural_col, unknown_col, breadth_col, quality_col = st.columns(5)
 with oil_col:
-    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Toplam {oil_score:.2f}")
+    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Event {oil_score:.2f} · Baskı {oil_pressure:.2f}")
 with structural_col:
-    st.metric("Olay Tipi", oil_event_type, help="MOMENTUM = hız şoku, STRUCTURAL = yüksek fiyat/süreklilik/arz baskısı, COMBINED = ikisi birlikte.")
+    display_type = "YAPISAL BASKI" if oil_event_type == "PRESSURE_ONLY" else oil_event_type
+    st.metric("Olay Durumu", display_type, help="PRESSURE_ONLY = baskı var fakat doğrulanmış event eşiği geçilmedi. STRUCTURAL = yapısal event doğrulandı. MOMENTUM = kısa vadeli şok. COMBINED = ikisi.")
 with unknown_col:
     st.metric("Unknown Anomaly", "AKTİF" if unknown_active else "PASİF", delta=f"Skor {unknown_score:.2f}")
 with breadth_col:
@@ -229,23 +233,23 @@ with struct_c1:
 with struct_c2:
     st.metric("Yapısal Skor", f"{oil_structural:.2f}")
 with struct_c3:
-    level_pct = fnum(latest, "oil_level_percentile_252", np.nan)
-    st.metric("WTI Fiyat Persentili", "—" if not np.isfinite(level_pct) else f"%{level_pct:.1f}")
+    level_pct = fnum(latest, "oil_level_percentile_756", np.nan)
+    st.metric("WTI 3Y Fiyat Persentili", "—" if not np.isfinite(level_pct) else f"%{level_pct:.1f}")
 with struct_c4:
     persist = fnum(latest, "oil_high_level_persistence_60d", np.nan)
     st.metric("Yüksek Seviye Sürekliliği", ratio_pct(persist))
 
 if oil_active:
-    overlay_note = "Allocation overlay uygulandı." if oil_overlay_applied else "Event aktif fakat allocation overlay uygulanmadı (rejim/floor kuralı)."
-    st.info(
-        f"🛢️ Petrol olayı aktif — {oil_event_type}. "
+    st.success(
+        f"🛢️ Doğrulanmış petrol olayı aktif — {oil_event_type}. "
         f"Momentum {oil_momentum:.2f} / Yapısal {oil_structural:.2f}. "
-        f"Emtia: {pct(weights['Emtia'])}. {overlay_note} {text_or(latest, 'commodity_event_reason', '')}"
+        f"Allocation overlay: {'AKTİF' if oil_overlay_applied else 'DEVREDE DEĞİL'}. {text_or(latest, 'commodity_event_reason', '')}"
     )
 else:
     st.caption(
-        f"Petrol olayı pasif: momentum={oil_momentum:.2f}, yapısal={oil_structural:.2f}. "
-        "Fiyatın seviyesi ile kısa vadeli hareket hızı ayrı ölçülmektedir."
+        f"Petrol event pasif. Baskı={oil_pressure:.2f} · Momentum={oil_momentum:.2f} · Yapısal={oil_structural:.2f}. "
+        f"Yapısal qualification={'EVET' if oil_structural_qualified else 'HAYIR'}. "
+        "Pressure-only durumları allocation değiştirmez; yalnızca izlenir."
     )
 if unknown_active:
     st.warning(
@@ -279,6 +283,10 @@ regime_reason.append(f"Rejim ID: {regime_id} — {regime_name}")
 regime_reason.append(f"Alt tip: {regime_subtype}")
 severity_source = text_or(latest, "regime_severity_source", "NONE")
 regime_reason.append(f"Rejim şiddet kaynağı: {severity_source}")
+pending_id = int(fnum(latest, "pending_regime_id", 0))
+pending_count = int(fnum(latest, "pending_regime_count", 0))
+if pending_id:
+    regime_reason.append(f"Bekleyen rejim teyidi: R{pending_id} · {pending_count} gözlem / gerekli teyit adımı")
 conflict_note = text_or(latest, "conflict_note", "Açıklama kaydı yok.")
 regime_reason.append(f"Karar motoru açıklaması: {conflict_note}")
 for line in regime_reason:
@@ -297,9 +305,11 @@ sensor_rows = [
     ["Brent-WTI Spread Persentili", f"{fnum(latest, 'brent_wti_spread_percentile_252', 0.0):.1f}", "Dislokasyon anomalisi"],
     ["Enerji Genişliği 20g", ratio_pct(fnum(latest, 'energy_breadth_20d', 0.0)), "Enerji kompleks teyidi"],
     ["Crude Inventory Draw Z", zfmt(fnum(latest, 'crude_inventory_draw_z', np.nan)), "EIA arz baskısı (opsiyonel)"],
+    ["Petrol Baskı Skoru", f"{oil_pressure:.2f}", "Confirmed gate öncesi baskı"],
     ["Petrol Momentum Skoru", f"{oil_momentum:.2f}", "Kısa vadeli şok"],
     ["Petrol Yapısal Skoru", f"{oil_structural:.2f}", "Kalıcı yüksek fiyat/arz stresi"],
-    ["Petrol Olay Tipi", oil_event_type, "Momentum / Structural / Combined"],
+    ["Petrol Yapısal Teyit", "EVET" if oil_structural_qualified else "HAYIR", "Confirmed event gate"],
+    ["Petrol Olay Tipi", "YAPISAL BASKI" if oil_event_type == "PRESSURE_ONLY" else oil_event_type, "Momentum / Structural / Combined"],
     ["Petrol Event Durumu", ("AKTİF" if oil_active else "PASİF") + f" · skor {oil_score:.2f}", "Olay katmanı"],
     ["Petrol Event Kalitesi", ratio_pct(fnum(latest, "oil_event_quality_60d", 0.5)), "Tarihsel event başarısı"],
     ["Emtia Genişliği 20g", ratio_pct(fnum(latest, "commodity_breadth_20d", 0.0)), "Teyit"],
@@ -344,7 +354,8 @@ st.caption("Bu audit yalnızca gerçekleşmiş geçmiş event'lerin sonraki 5 i�
 
 st.subheader("🛡️ Veri Sağlığı ve Fail-Closed")
 health_rows = [
-    ["Core veri sağlığı", "HALT" if health == "HALT" else "HEALTHY" if not issues else "DEGRADED"],
+    ["Core veri sağlığı", health],
+    ["Event veri kapsamı", text_or(latest, "event_coverage_status", "UNKNOWN")],
     ["İkincil veri", "1+ uyarı" if warnings else "Tam"],
     ["Karar durumu", decision],
     ["Karar sağlığı", decision_health],
