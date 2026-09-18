@@ -375,7 +375,13 @@ class UltimateSentinelEngine:
             - z_series(factors["rates_fwd"]).iloc[-1] * weights[5]
         )
 
-        vix_term = float(y_data["^VIX"].iloc[-1] / y_data["^VIX3M"].iloc[-1]) if pd.notna(y_data["^VIX3M"].iloc[-1]) and y_data["^VIX3M"].iloc[-1] > 0 else 0.85
+        vix_term = (
+            float(y_data["^VIX"].iloc[-1] / y_data["^VIX3M"].iloc[-1])
+            if "^VIX3M" in y_data.columns
+            and pd.notna(y_data["^VIX3M"].iloc[-1])
+            and y_data["^VIX3M"].iloc[-1] > 0
+            else np.nan
+        )
 
         calibrated_th = self.regime_engine.config.get("calibrated_thresholds", None)
         classified = self.regime_engine.run_time_series(prepared, custom_thresholds=calibrated_th)
@@ -492,7 +498,7 @@ class UltimateSentinelEngine:
             "pmi_z": 0.0,
             "yield_curve": 0.0,
             "w_str": "",
-            "vix_term": 0.0,
+            "vix_term": np.nan,
             "oil_trend": 0.0,
             "oil_ret_5d_z": 0.0,
             "oil_ret_20d_z": 0.0,
