@@ -1,7 +1,7 @@
 """
 Deep Quantitative Strategy Search & Optimization Engine
 Evaluates if higher Sharpe / Calmar or lower Max DD is mathematically possible:
-1. Macro Sentinel Apex (Dynamic Regime with Calibrated Optimums: Stagflation Oil 30%, Risk-On BTC 10%)
+1. Macro Sentinel Dynamic Regime
 3. Tail-Risk Asymmetric Parity (Nassim Taleb Barbell style)
 4. Dynamic Volatility-Targeted Momentum (Vol-Targeting overlay)
 """
@@ -60,7 +60,7 @@ w_crp = (classified['regime_crypto_weight'] / 100.0).shift(1).fillna(0.05)
 strat_current = w_csh*cash_ret + w_gld*gold_ret + w_bnd*bond_ret + w_eq*spx_ret + w_cmd*oil_ret + w_crp*btc_ret
 res_current = evaluate_ret_series(strat_current, "🏛️ Macro Sentinel (Mevcut)")
 
-# 2. Macro Sentinel Apex (Hassasiyet Testi Optimizasyonu: Stagflasyonda %30 Petrol, Risk-On'da %10 Kripto)
+# 2. Macro Sentinel Dynamic Regime (descriptive sensitivity variant)
 apex_r = []
 for idx in range(len(classified)):
     if idx == 0:
@@ -82,7 +82,7 @@ for idx in range(len(classified)):
     r = w_c*cash_ret.iloc[idx] + w_g*gold_ret.iloc[idx] + w_b*bond_ret.iloc[idx] + w_e*spx_ret.iloc[idx] + w_o*oil_ret.iloc[idx] + w_k*btc_ret.iloc[idx]
     apex_r.append(r)
 strat_apex = pd.Series(apex_r, index=classified.index)
-res_apex = evaluate_ret_series(strat_apex, "⚡ Macro Sentinel Apex (Optimize)")
+res_apex = evaluate_ret_series(strat_apex, "⚡ Macro Sentinel Dynamic")
 
 # 3. Taleb Barbell Asymmetric (%85 Ultra-Safe Nakit/T-Bill + %10 Altın + %5 Konveks Kripto)
 taleb_r = 0.85*cash_ret + 0.10*gold_ret + 0.05*btc_ret
