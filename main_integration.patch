@@ -1,0 +1,39 @@
+*** Begin Patch
+*** Update File: main.py
+@@
+ from regime_engine import MacroRegimeEngine
++from adaptive_strategy_layer import AdaptiveStrategyLayer
+@@
+         self.regime_engine = MacroRegimeEngine()
++        self.strategy_layer = AdaptiveStrategyLayer(self.regime_engine.config)
+@@
+-        weights_live = self.regime_engine.get_portfolio_weights(regime_id, regime_subtype, row=latest)
++        # Regime selects the macro state; the adaptive layer controls actual
++        # risk budget and cross-asset selection. It can move substantially into
++        # cash during synchronized drawdowns and redeploy only when opportunity
++        # breadth and risk conditions recover.
++        strategy_result = self.strategy_layer.allocate(
++            prepared_df=prepared,
++            classified_df=classified,
++            history=history,
++        )
++        weights_live = dict(strategy_result["weights"])
++        weights_live.update({
++            "strategy_mode": strategy_result.get("strategy_mode", "ADAPTIVE_RISK_ALLOCATION"),
++            "strategy_risk_budget": float(strategy_result.get("risk_budget_final", 0.0)),
++            "strategy_opportunity_score": float(strategy_result.get("opportunity_score", 0.0)),
++            "strategy_stress_score": float(strategy_result.get("stress_score", 0.0)),
++            "strategy_stress_broad": bool(strategy_result.get("stress_broad", False)),
++            "strategy_stress_hard": bool(strategy_result.get("stress_hard", False)),
++            "strategy_stress_negative_breadth": float(strategy_result.get("stress_negative_breadth", 0.0)),
++            "strategy_stress_avg_corr_40d": float(strategy_result.get("stress_avg_corr_40d", 0.0)),
++            "strategy_vol_scale": float(strategy_result.get("vol_scale", 1.0)),
++            "strategy_cash_floor": float(strategy_result.get("cash_floor", 0.0)),
++            "strategy_stress_reason": str(strategy_result.get("stress_reason", "")),
++            "strategy_asset_score_equity": float(strategy_result.get("asset_scores", {}).get("equity", 0.0)),
++            "strategy_asset_score_gold": float(strategy_result.get("asset_scores", {}).get("gold", 0.0)),
++            "strategy_asset_score_bond": float(strategy_result.get("asset_scores", {}).get("bond", 0.0)),
++            "strategy_asset_score_commodity": float(strategy_result.get("asset_scores", {}).get("commodity", 0.0)),
++            "strategy_asset_score_crypto": float(strategy_result.get("asset_scores", {}).get("crypto", 0.0)),
++        })
+*** End Patch

@@ -1,0 +1,39 @@
+{
+  "research_strategies": {
+    "adaptive_layer": {
+      "target_annual_vol": 0.085,
+      "max_risk_budget": 0.92,
+      "min_risk_budget": 0.05,
+      "softmax_temperature": 1.15,
+      "score_floor": 0.05,
+      "broad_negative_breadth": 0.60,
+      "hard_negative_breadth": 0.80,
+      "broad_corr": 0.45,
+      "hard_corr": 0.60,
+      "broad_vix_pct": 60.0,
+      "hard_vix_pct": 80.0,
+      "broad_ndl_z": -0.25,
+      "hard_ndl_z": -0.80,
+      "hard_risk_cap": 0.10,
+      "broad_risk_multiplier": 0.55,
+      "recent_stress_days": 5,
+      "recovery_required_days": 3,
+      "risk_budget_by_regime": {
+        "0": 0.60,
+        "1": 0.35,
+        "2": 0.08,
+        "3": 0.45,
+        "4": 0.25,
+        "5": 0.82
+      },
+      "min_cash_by_regime": {
+        "0": 0.10,
+        "1": 0.15,
+        "2": 0.80,
+        "3": 0.20,
+        "4": 0.25,
+        "5": 0.05
+      }
+    }
+  }
+}
