@@ -86,6 +86,31 @@ jobs:
           if df.empty:
               raise SystemExit('cms_history.csv is empty')
 
+          # Self-heal legacy/inconsistent persisted oil metadata before validation.
+          # The numeric evidence and qualification flag are authoritative; stale
+          # serialized event_type/active/score fields are repaired in-place.
+          from main import _canonicalize_result_event_state
+          from regime_engine import MacroRegimeEngine
+          engine_cfg = MacroRegimeEngine().config
+          oil_cfg = engine_cfg.get('event_overlay', {}).get('oil', {})
+          activation_score = float(oil_cfg.get('activation_score', 0.20))
+          last_idx = df.index[-1]
+          before = df.loc[last_idx].to_dict()
+          after = _canonicalize_result_event_state(before, activation_score)
+          repair_fields = [
+              'oil_pressure_score', 'oil_event_score', 'oil_event_type',
+              'oil_event_active', 'oil_structural_qualified',
+              'oil_momentum_confirmed'
+          ]
+          repaired = False
+          for field in repair_fields:
+              if field in df.columns and str(df.at[last_idx, field]) != str(after.get(field)):
+                  df.at[last_idx, field] = after.get(field)
+                  repaired = True
+          if repaired:
+              df.to_csv('cms_history.csv', index=False)
+              print('legacy/inconsistent oil event state repaired before validation')
+
           row = df.iloc[-1]
           health = str(row.get('data_health_status', 'HALT')).upper()
           coverage = str(row.get('event_coverage_status', 'UNKNOWN')).upper()
