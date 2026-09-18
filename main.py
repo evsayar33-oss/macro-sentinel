@@ -260,8 +260,9 @@ class UltimateSentinelEngine:
             "crypto": float(weights.get("crypto", 0.0)),
         }
 
-    def _data_health(self, fred_meta: Dict[str, Dict[str, object]], y_data: pd.DataFrame, today_index, source_map: Optional[Dict[str, str]] = None) -> Dict[str, object]:
+    def _data_health(self, fred_meta: Dict[str, Dict[str, object]], y_data: pd.DataFrame, today_index, source_map: Optional[Dict[str, str]] = None, eia_meta: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         source_map = source_map or {}
+        eia_meta = eia_meta or {}
         core_yahoo = ["ES=F", "CL=F", "GC=F", "^VIX"]
         secondary_yahoo = ["HG=F", "SI=F", "USDJPY=X", "EURUSD=X", "SOXX", "BTC-USD", "BDRY", "^VIX3M"]
         energy_complements = ["BZ=F", "HO=F", "RB=F", "NG=F"]
@@ -477,7 +478,7 @@ class UltimateSentinelEngine:
         if y_data.empty:
             health = {"status": "HALT", "issues": [f"Yahoo unavailable: {yahoo_error or 'empty response'}"], "warnings": [], "core_market_available": 0, "core_market_required": 4, "source_notes": []}
         else:
-            health = self._data_health(fred_meta, y_data, now, source_map=source_map)
+            health = self._data_health(fred_meta, y_data, now, source_map=source_map, eia_meta=eia_meta)
             if yahoo_error:
                 health["warnings"].append(f"Yahoo warning: {yahoo_error}")
 
