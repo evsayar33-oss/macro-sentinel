@@ -17,8 +17,8 @@ from typing import Dict, Any, Tuple
 from regime_engine import MacroRegimeEngine
 
 
-def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-01") -> pd.DataFrame:
-    np.random.seed(42)
+def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-01", seed: int = 42) -> pd.DataFrame:
+    np.random.seed(seed)
     dates = pd.date_range(start=start_date, end=end_date, freq='B')  # Business days
     n = len(dates)
 
@@ -397,6 +397,123 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+
+def _calc_metrics(ret_series: pd.Series) -> Dict[str, float]:
+    ann_factor = 252.0
+    r = pd.to_numeric(ret_series, errors="coerce").fillna(0.0)
+    n_years = len(r) / ann_factor
+    cum = (1.0 + r).cumprod()
+    total = float((cum.iloc[-1] - 1.0) * 100.0)
+    ann_ret = float((cum.iloc[-1] ** (1.0 / max(n_years, 0.1)) - 1.0) * 100.0)
+    ann_vol = float(r.std() * np.sqrt(ann_factor) * 100.0)
+    dd = (cum / cum.cummax()) - 1.0
+    max_dd = float(abs(dd.min()) * 100.0)
+    sharpe = float((ann_ret - 3.0) / max(ann_vol, 0.01))
+    calmar = float(ann_ret / max(max_dd, 0.01))
+    return {
+        "annualized_return": round(ann_ret, 2),
+        "annualized_volatility": round(ann_vol, 2),
+        "sharpe_ratio": round(sharpe, 2),
+        "max_drawdown": round(max_dd, 2),
+        "calmar_ratio": round(calmar, 2),
+        "total_return": round(total, 2),
+    }
+
+
+def build_research_strategy_returns(df: pd.DataFrame, variant: str = "adaptive_opportunity") -> pd.Series:
+    """Research-only return-seeking overlay. Uses only t-1 information for t returns."""
+    eq = pd.to_numeric(df["spx"], errors="coerce")
+    gold = pd.to_numeric(df["gold"], errors="coerce")
+    oil = pd.to_numeric(df["oil"], errors="coerce")
+    btc = pd.to_numeric(df["btc"], errors="coerce")
+    bond = pd.to_numeric(df["ust10y"], errors="coerce")
+    cash = pd.to_numeric(df["dgs2"], errors="coerce") / 100.0
+
+    eq_ret = eq.pct_change().fillna(0.0)
+    gold_ret = gold.pct_change().fillna(0.0)
+    oil_ret = oil.pct_change().fillna(0.0)
+    btc_ret = btc.pct_change().fillna(0.0)
+    bond_ret = bond.pct_change().fillna(0.0)
+    cash_ret = cash / 252.0
+
+    weights = []
+    for i in range(len(df)):
+        if i == 0:
+            weights.append((0.35, 0.20, 0.20, 0.15, 0.05, 0.05))
+            continue
+        j = i - 1
+        rid = int(df["confirmed_regime_id"].iloc[j])
+        sp20 = float(eq.pct_change(20).iloc[j]) if pd.notna(eq.pct_change(20).iloc[j]) else 0.0
+        sp100 = float(eq.pct_change(100).iloc[j]) if pd.notna(eq.pct_change(100).iloc[j]) else 0.0
+        btc60 = float(btc.pct_change(60).iloc[j]) if pd.notna(btc.pct_change(60).iloc[j]) else 0.0
+        vix_pct = float(df["vix_percentile_252"].iloc[j]) if pd.notna(df["vix_percentile_252"].iloc[j]) else 50.0
+
+        base_risk = {0: 0.60, 1: 0.35, 2: 0.08, 3: 0.45, 4: 0.25, 5: 0.82}.get(rid, 0.60)
+        if sp20 > 0 and sp100 > 0:
+            base_risk += 0.12
+        elif sp20 < 0 and sp100 < 0:
+            base_risk -= 0.15
+        if vix_pct > 80:
+            base_risk -= 0.18
+        elif vix_pct < 30:
+            base_risk += 0.05
+        if variant == "adaptive_opportunity_btc" and btc60 > 0:
+            base_risk += 0.06
+        elif variant == "adaptive_opportunity_btc" and btc60 < 0:
+            base_risk -= 0.04
+        if variant == "balanced_trend" and rid == 0 and sp100 > 0:
+            base_risk += 0.05
+
+        risk_budget = float(np.clip(base_risk, 0.05, 0.88))
+        eq_w = risk_budget * 0.62
+        gold_w = risk_budget * 0.14
+        oil_w = risk_budget * 0.10
+        bond_w = risk_budget * 0.14
+        btc_w = risk_budget * 0.10 if (variant == "adaptive_opportunity_btc" and btc60 > 0 and risk_budget > 0.45) else 0.0
+        bond_w = max(0.0, bond_w - btc_w)
+        cash_w = max(0.0, 1.0 - (eq_w + gold_w + oil_w + bond_w + btc_w))
+        weights.append((cash_w, gold_w, bond_w, eq_w, oil_w, btc_w))
+
+    w = pd.DataFrame(weights, index=df.index)
+    return (
+        w[0] * cash_ret
+        + w[1] * gold_ret
+        + w[2] * bond_ret
+        + w[3] * eq_ret
+        + w[4] * oil_ret
+        + w[5] * btc_ret
+    )
+
+
+def research_strategy_suite(df: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    candidates = {
+        "Macro Sentinel Dynamic": (
+            (df["regime_cash_weight"] / 100.0).shift(1).fillna(0.35) * (df["dgs2"] / 100.0 / 252.0)
+            + (df["regime_gold_weight"] / 100.0).shift(1).fillna(0.20) * df["gold"].pct_change().fillna(0.0)
+            + (df["regime_bond_weight"] / 100.0).shift(1).fillna(0.20) * df["ust10y"].pct_change().fillna(0.0)
+            + (df["regime_eq_weight"] / 100.0).shift(1).fillna(0.15) * df["spx"].pct_change().fillna(0.0)
+            + (df["regime_commodity_weight"] / 100.0).shift(1).fillna(0.05) * df["oil"].pct_change().fillna(0.0)
+            + (df["regime_crypto_weight"] / 100.0).shift(1).fillna(0.05) * df["btc"].pct_change().fillna(0.0)
+        ),
+        "Research: Adaptive Opportunity": build_research_strategy_returns(df, "adaptive_opportunity"),
+        "Research: Adaptive Opportunity + BTC": build_research_strategy_returns(df, "adaptive_opportunity_btc"),
+        "Research: Balanced Trend": build_research_strategy_returns(df, "balanced_trend"),
+    }
+    return {name: _calc_metrics(ret) for name, ret in candidates.items()}
+
+
+def multi_seed_research_suite(seeds=(7, 19, 42, 71, 101)) -> pd.DataFrame:
+    rows = []
+    for seed in seeds:
+        engine = MacroRegimeEngine()
+        raw = generate_synthetic_macro_history(seed=seed)
+        prepared = engine.prepare_indicators(raw)
+        classified = engine.run_time_series(prepared)
+        suite = research_strategy_suite(classified)
+        for name, metrics in suite.items():
+            rows.append({"seed": seed, "strategy": name, **metrics})
+    return pd.DataFrame(rows)
+
 def main():
     print("=" * 85)
     print("🏛️ MACRO SENTINEL: DİNAMİK REJİM & OLAY BACKTEST SÜİTİ (2018 - 2026)")
@@ -457,7 +574,12 @@ def main():
     print(perf_summary.to_string(index=False))
     print("\nModel invariants:", bt["invariants"])
 
+    research = research_strategy_suite(classified)
+    print("\n\nResearch strategy candidates (synthetic; not auto-deployed):")
+    print(pd.DataFrame.from_dict(research, orient="index").to_string())
+
     config = engine.load_config()
+    config["research_strategy_metrics_single_seed"] = research
     config["backtest_metrics"] = {
         "strategy": {
             "name": "⚡ Macro Sentinel Dynamic",
@@ -517,12 +639,22 @@ Benchmarklar yalnızca karşılaştırmalı bağlam sağlar; sonuçlar veri üre
 | Artemis Dragon | %{bt['benchmark_artemis_dragon']['annualized_return']:.2f} | %{bt['benchmark_artemis_dragon']['annualized_volatility']:.2f} | {bt['benchmark_artemis_dragon']['sharpe_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['max_drawdown']:.2f} | {bt['benchmark_artemis_dragon']['calmar_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['total_return']:.2f} |
 | Taleb Barbell Asymmetric | %{bt['benchmark_taleb_barbell']['annualized_return']:.2f} | %{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f} | {bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} | {bt['benchmark_taleb_barbell']['calmar_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['total_return']:.2f} |
 
-## 4. Yorumlama notları
+## 4. Araştırma adayları
+Bu adaylar sentetik veri üzerinde yalnızca araştırma amacıyla ölçülür; canlı allocation'a otomatik olarak geçirilmez.
+
+| Aday | Yıllık Getiri | Volatilite | Sharpe | Max DD | Calmar |
+|---|---:|---:|---:|---:|---:|
 1. Sentetik veri üzerindeki geri çağırma, gerçek tarihsel yeniden oynatma ile aynı şey değildir.
 2. Sharpe, Calmar ve drawdown metrikleri tek başına model doğruluğunu kanıtlamaz.
 3. Yapısal petrol olayı ayrı bir event katmanı olarak değerlendirilir; named regime ile aynı kavram değildir.
 4. Gerçek model kalitesi için ileride walk-forward ve gerçek out-of-sample event outcome audit kullanılmalıdır.
 """
+    candidate_names = [k for k in research.keys() if k != "Macro Sentinel Dynamic"]
+    candidate_table = ""
+    for name in candidate_names:
+        m = research[name]
+        candidate_table += f"| {name} | %{m['annualized_return']:.2f} | %{m['annualized_volatility']:.2f} | {m['sharpe_ratio']:.2f} | %{m['max_drawdown']:.2f} | {m['calmar_ratio']:.2f} |\n"
+    report_md = report_md.replace("|---|---:|---:|---:|---:|---:|\n\n## 5. Yorumlama notları", "|---|---:|---:|---:|---:|---:|\n" + candidate_table + "\n## 5. Yorumlama notları")
     with open("backtest_report.md", "w", encoding="utf-8") as f:
         f.write(report_md)
     print("Saved Backtest Report to backtest_report.md")
