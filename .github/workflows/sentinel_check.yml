@@ -21,12 +21,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -46,6 +46,35 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python main.py
+
+      - name: Synthetic invariant regression test
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from backtest_regimes import generate_synthetic_macro_history
+          from regime_engine import MacroRegimeEngine
+
+          engine = MacroRegimeEngine()
+          prepared = engine.prepare_indicators(generate_synthetic_macro_history(seed=42))
+          classified = engine.run_time_series(prepared)
+          active = classified["oil_event_active"].astype(bool)
+          types = classified["oil_event_type"].astype(str).str.upper()
+          qualified = classified["oil_structural_qualified"].astype(bool)
+          score = classified["oil_event_score"].astype(float)
+          if bool(((~active) & types.isin({"MOMENTUM","STRUCTURAL","COMBINED"})).any()):
+              raise SystemExit("SYNTHETIC OIL EVENT STATE INCONSISTENT")
+          if bool(((types == "STRUCTURAL") & (~qualified)).any()):
+              raise SystemExit("SYNTHETIC STRUCTURAL QUALIFICATION INCONSISTENT")
+          if bool(((~active) & (abs(score) > 1e-9)).any()):
+              raise SystemExit("SYNTHETIC INACTIVE EVENT MUST HAVE ZERO SCORE")
+          weights = classified[[
+              "regime_cash_weight","regime_gold_weight","regime_bond_weight",
+              "regime_eq_weight","regime_commodity_weight","regime_crypto_weight"
+          ]].sum(axis=1)
+          if not np.allclose(weights.values, 100.0, atol=0.05):
+              raise SystemExit("SYNTHETIC ALLOCATION INTEGRITY FAILURE")
+          print("synthetic invariant regression: PASS")
+          PY
 
       - name: Validate latest decision and model invariants
         run: |
