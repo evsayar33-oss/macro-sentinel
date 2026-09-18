@@ -213,6 +213,16 @@ def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-
 def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     df = df_classified.copy()
 
+    weight_cols = [
+        "regime_cash_weight", "regime_gold_weight", "regime_bond_weight",
+        "regime_eq_weight", "regime_commodity_weight", "regime_crypto_weight"
+    ]
+    if not all(c in df.columns for c in weight_cols):
+        raise ValueError("Backtest is missing regime allocation columns")
+    allocation_sum = df[weight_cols].sum(axis=1)
+    if not np.allclose(allocation_sum.values, 100.0, atol=0.05):
+        raise ValueError("Backtest allocation integrity failure: weights do not sum to 100%")
+
     spx_ret = df['spx'].pct_change().fillna(0.0)
     bond_ret = df['ust10y'].pct_change().fillna(0.0)
     cash_ret = (df['dgs2'] / 100.0) / 252.0
