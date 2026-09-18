@@ -1,36 +1,83 @@
-name: Ultimate Macro Sentinel Auto-Updater
+name: Macro Sentinel Autonomous Daily Update
 
 on:
   schedule:
-    - cron: '0 21 * * 1-5'
-  workflow_dispatch: 
+    # Run every day. On weekends markets are stale; the data-quality gate
+    # prevents a stale feed from changing the portfolio.
+    - cron: '30 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macro-sentinel-daily
+  cancel-in-progress: false
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - name: Dosyaları Çek (Checkout)
-        uses: actions/checkout@v3
-
-      - name: Python Kurulumu
-        uses: actions/setup-python@v4
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
-          python-version: '3.10'
+          fetch-depth: 1
 
-      - name: Gerekli Kütüphaneleri Yükle
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Yapay Zeka Motorunu Çalıştır (main.py)
+      - name: Static syntax check
+        run: |
+          python -m py_compile main.py regime_engine.py app.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py
+
+      - name: Run live Macro Sentinel engine
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python main.py
 
-      - name: Yeni Verileri Github'a Kaydet ve Yükle
+      - name: Validate latest decision
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          python - <<'PY'
+          import sys
+          import pandas as pd
+
+          df = pd.read_csv('cms_history.csv')
+          if df.empty:
+              raise SystemExit('cms_history.csv is empty')
+
+          row = df.iloc[-1]
+          health = str(row.get('data_health_status', 'HALT'))
+          decision = str(row.get('decision_status', 'UNKNOWN'))
+          total = float(row.get('allocation_total', 0.0))
+
+          print(f'data_health={health}')
+          print(f'decision_status={decision}')
+          print(f'allocation_total={total:.4f}')
+          print(f'regime={row.get("regime_name", "UNKNOWN")}')
+          print(f'oil_event_score={row.get("oil_event_score", 0.0)}')
+          print(f'commodity_weight={row.get("commodity_weight", 0.0)}')
+
+          if abs(total - 100.0) > 0.05:
+              raise SystemExit('ALLOCATION INTEGRITY FAILURE')
+
+          if health == 'HALT' or decision not in {'LIVE', 'HOLD_LAST_VALID'}:
+              raise SystemExit('DATA HEALTH GATE FAILED — no trusted live decision')
+          PY
+
+      - name: Commit trusted history update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add cms_history.csv
-          git commit -m "🤖 Auto-Update: Makro Veriler Güncellendi" || echo "Değişiklik yok"
+          git commit -m "🤖 Macro Sentinel: trusted daily state update" || echo "No history change"
           git push
