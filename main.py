@@ -15,6 +15,7 @@ Runtime contract
 import json
 import os
 from datetime import datetime, timezone
+from io import StringIO
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -72,7 +73,7 @@ class UltimateSentinelEngine:
 
     def fetch_fred(self, series_id: str, limit: int = 500) -> Tuple[pd.Series, Dict[str, object]]:
         if not self.api_key:
-            return pd.Series(dtype=float), {"ok": False, "reason": "FRED_API_KEY missing", "last_date": None, "count": 0}
+            return self.fetch_fred_public(series_id, limit=max(limit, 500))
         try:
             params = {
                 "series_id": series_id,
@@ -96,7 +97,31 @@ class UltimateSentinelEngine:
             last_date = series.index[-1].date().isoformat() if not series.empty else None
             return series, {"ok": not series.empty, "reason": "ok" if not series.empty else "empty", "last_date": last_date, "count": int(series.shape[0])}
         except Exception as exc:
-            return pd.Series(dtype=float), {"ok": False, "reason": str(exc)[:180], "last_date": None, "count": 0}
+            series, meta = self.fetch_fred_public(series_id, limit=max(limit, 500))
+            if meta.get("ok"):
+                meta["primary_error"] = str(exc)[:180]
+                return series, meta
+            return pd.Series(dtype=float), {"ok": False, "reason": str(exc)[:180], "last_date": None, "count": 0, "source": "FRED_API"}
+
+    def fetch_fred_public(self, series_id: str, limit: int = 1000) -> Tuple[pd.Series, Dict[str, object]]:
+        """Official FRED CSV endpoint fallback that does not require an API key."""
+        try:
+            url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            response = requests.get(url, timeout=20, headers={"User-Agent": "Macro-Sentinel/2.3"})
+            response.raise_for_status()
+            raw = pd.read_csv(StringIO(response.text))
+            if raw.empty or raw.shape[1] < 2:
+                return pd.Series(dtype=float), {"ok": False, "reason": "empty FRED CSV", "last_date": None, "count": 0, "source": "FRED_GRAPH_CSV"}
+            date_col = raw.columns[0]
+            value_col = series_id if series_id in raw.columns else raw.columns[1]
+            raw[date_col] = pd.to_datetime(raw[date_col], errors="coerce")
+            raw[value_col] = pd.to_numeric(raw[value_col], errors="coerce")
+            raw = raw.dropna(subset=[date_col, value_col]).sort_values(date_col).tail(limit)
+            series = raw.set_index(date_col)[value_col]
+            last_date = series.index[-1].date().isoformat() if not series.empty else None
+            return series, {"ok": not series.empty, "reason": "ok" if not series.empty else "empty", "last_date": last_date, "count": int(series.shape[0]), "source": "FRED_GRAPH_CSV"}
+        except Exception as exc:
+            return pd.Series(dtype=float), {"ok": False, "reason": str(exc)[:180], "last_date": None, "count": 0, "source": "FRED_GRAPH_CSV"}
 
     def fetch_eia_series(self, series_id: str, length: int = 260) -> Tuple[pd.Series, Dict[str, object]]:
         """Optional direct EIA v2 fallback for weekly petroleum supply data."""
@@ -133,16 +158,27 @@ class UltimateSentinelEngine:
 
     @staticmethod
     def _merge_fallback_column(frame: pd.DataFrame, column: str, fallback: pd.Series, fallback_name: str, sources: Dict[str, str]) -> None:
+        """Fill missing primary observations from fallback without future extrapolation."""
         if fallback is None or fallback.empty:
             return
-        existing_ok = column in frame.columns and frame[column].notna().sum() > 0
-        if existing_ok:
+        if column not in frame.columns:
+            frame[column] = np.nan
+        primary = pd.to_numeric(frame[column], errors="coerce")
+        fallback = pd.to_numeric(fallback, errors="coerce").dropna().sort_index()
+        if fallback.empty:
             return
-        aligned = pd.to_numeric(fallback, errors="coerce").sort_index().reindex(frame.index).ffill()
-        if aligned.notna().sum() == 0:
-            return
-        frame[column] = aligned
-        sources[column] = fallback_name
+        aligned = fallback.reindex(frame.index, method="ffill")
+        # Never propagate a fallback beyond the fallback source's own last observation.
+        aligned.loc[aligned.index > fallback.index[-1]] = np.nan
+        fill_mask = primary.isna() & aligned.notna()
+        if fill_mask.any():
+            frame.loc[fill_mask, column] = aligned.loc[fill_mask]
+        existing_source = sources.get(column)
+        if frame[column].notna().any():
+            if existing_source and fill_mask.any():
+                sources[column] = f"{existing_source}+{fallback_name}"
+            elif not existing_source:
+                sources[column] = fallback_name
 
     @staticmethod
     def _freshness(last_date, max_age_days: int) -> bool:
@@ -189,7 +225,7 @@ class UltimateSentinelEngine:
         if valid.empty:
             return None
         row = valid.iloc[-1]
-        return {
+        state = {
             "cash": float(row["cash_weight"]),
             "gold": float(row["gold_weight"]),
             "bond": float(row["bond_weight"]),
@@ -198,6 +234,20 @@ class UltimateSentinelEngine:
             "crypto": float(row["crypto_weight"]),
             "date": str(row.get("date", "")),
         }
+        # Preserve the last trusted state for HOLD_LAST_VALID / market-closed
+        # displays instead of replacing it with a synthetic blank regime.
+        carry_fields = [
+            "regime_id", "regime_name", "regime_type", "regime_subtype",
+            "regime_status", "regime_severity_source", "hysteresis_days_left",
+            "conflict_note", "oil_event_score", "oil_momentum_score",
+            "oil_structural_score", "oil_event_type", "oil_event_active",
+            "commodity_event_active", "commodity_event_reason",
+            "unknown_event_score", "unknown_event_active", "unknown_guard_active"
+        ]
+        for field in carry_fields:
+            if field in row.index and pd.notna(row.get(field)):
+                state[field] = row.get(field)
+        return state
 
     @staticmethod
     def _allocation_payload(weights: Dict[str, float]) -> Dict[str, float]:
@@ -301,6 +351,25 @@ class UltimateSentinelEngine:
         now = datetime.now(IST_TZ)
         history = self._load_history()
 
+        # Scheduled production runs are weekdays. A manual weekend run must not
+        # masquerade as a fresh market decision using Friday prices.
+        if now.weekday() >= 5 and os.getenv("ALLOW_WEEKEND_RUN", "0").lower() not in {"1", "true", "yes"}:
+            prev = self._valid_previous_allocation(history)
+            if prev:
+                weights = {k: prev[k] for k in ("cash", "gold", "bond", "equity", "commodity", "crypto")}
+                carry = {k: v for k, v in prev.items() if k not in {"cash", "gold", "bond", "equity", "commodity", "crypto", "date"}}
+                carry["decision_note"] = "Market closed: last trusted state retained; no new market decision created."
+                return self._make_result(
+                    now=now,
+                    health={"status": "MARKET_CLOSED", "issues": [], "warnings": ["Market calendar: weekend hold; no new allocation decision."], "source_notes": []},
+                    api_status="Market Closed",
+                    weights=weights,
+                    source="MARKET_CLOSED_HOLD",
+                    previous_date=prev.get("date", ""),
+                    history=history,
+                    extra=carry,
+                )
+
         fred_ids = {
             "fed": "WALCL",
             "ecb": "ECBASSETSW",
@@ -351,6 +420,10 @@ class UltimateSentinelEngine:
             yahoo_error = str(exc)[:180]
 
         source_map: Dict[str, str] = {}
+        if not y_data.empty:
+            for ticker in tickers:
+                if ticker in y_data.columns and y_data[ticker].notna().any():
+                    source_map[ticker] = f"Yahoo:{ticker}"
 
         # FRED/CBOE fallbacks: ^VIX3M, WTI spot and Brent spot. FRED identifies
         # VXVCLS as the CBOE 3-month volatility index and the crude series as EIA
@@ -377,7 +450,10 @@ class UltimateSentinelEngine:
                 weights = {k: prev[k] for k in ("cash", "gold", "bond", "equity", "commodity", "crypto")}
                 allocation_source = "LAST_VALID"
                 previous_date = prev.get("date", "")
+                carry = {k: v for k, v in prev.items() if k not in {"cash", "gold", "bond", "equity", "commodity", "crypto", "date"}}
+                carry["decision_note"] = "Critical data failure: last trusted state retained; no new allocation created."
             else:
+                carry = {}
                 weights = {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
                 allocation_source = "SAFE_CASH_FIRST_RUN"
                 previous_date = ""
@@ -390,6 +466,7 @@ class UltimateSentinelEngine:
                 source=allocation_source,
                 previous_date=previous_date,
                 history=history,
+                extra=carry,
             )
 
         # Build indicators. From this point onward all data are real and point-in-time.
@@ -491,6 +568,10 @@ class UltimateSentinelEngine:
                 "cash": 90.0, "gold": 0.0, "bond": 10.0,
                 "equity": 0.0, "commodity": 0.0, "crypto": 0.0,
                 "oil_event_score": float(weights_live.get("oil_event_score", 0.0)),
+                "oil_momentum_score": float(weights_live.get("oil_momentum_score", 0.0)),
+                "oil_structural_score": float(weights_live.get("oil_structural_score", 0.0)),
+                "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
+                "oil_event_active": bool(weights_live.get("oil_event_active", False)),
                 "commodity_event_active": False,
                 "commodity_event_reason": "Emergency liquidity override active.",
                 "unknown_event_score": float(weights_live.get("unknown_event_score", 0.0)),
@@ -504,7 +585,7 @@ class UltimateSentinelEngine:
         pmi_z = (pmi_val - 50.0) / 3.0
         yc_val = float(raw["yc"].iloc[-1]) if not raw["yc"].empty else float(latest.get("dgs10", 4.0) - latest.get("dgs2", 4.0))
 
-        return self._make_result(
+        result = self._make_result(
             now=now,
             health=health,
             api_status="Online" if health["status"] == "HEALTHY" else "Degraded",
@@ -519,6 +600,9 @@ class UltimateSentinelEngine:
                 "active_growth_name": active_growth_name,
                 "copper_gold": round(float(y_data["HG=F"].iloc[-1] / y_data["GC=F"].iloc[-1]), 4),
                 "vix": round(float(y_data["^VIX"].iloc[-1]), 2),
+                "oil_price": round(float(y_data["CL=F"].iloc[-1]), 4),
+                "brent_price": round(float(y_data["BZ=F"].iloc[-1]), 4) if pd.notna(y_data["BZ=F"].iloc[-1]) else np.nan,
+                "spx_price": round(float(y_data["ES=F"].iloc[-1]), 4),
                 "real_rate": round(float(tips_s.iloc[-1]), 2),
                 "pmi_z": round(float(pmi_z), 2),
                 "yield_curve": round(float(yc_val), 2),
@@ -542,10 +626,12 @@ class UltimateSentinelEngine:
                 "oil_momentum_score": round(float(weights_live.get("oil_momentum_score", 0.0)), 3),
                 "oil_structural_score": round(float(weights_live.get("oil_structural_score", 0.0)), 3),
                 "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
+                "oil_event_active": bool(weights_live.get("oil_event_active", False)),
                 "commodity_event_active": bool(weights_live.get("commodity_event_active", False)),
                 "commodity_event_reason": str(weights_live.get("commodity_event_reason", "")),
                 "unknown_event_score": round(float(weights_live.get("unknown_event_score", 0.0)), 3),
                 "unknown_event_active": bool(weights_live.get("unknown_event_active", False)),
+                "unknown_guard_active": bool(weights_live.get("unknown_guard_active", False)),
                 "oil_event_quality_60d": round(float(latest.get("oil_event_quality_60d", 0.5)), 3),
                 "commodity_breadth_20d": round(float(latest.get("commodity_breadth_20d", 0.0)), 3),
                 "ml_confidence": ml_confidence,
@@ -553,10 +639,10 @@ class UltimateSentinelEngine:
                 "regime_name": regime_name,
                 "regime_type": regime_type,
                 "regime_subtype": regime_subtype,
+                "regime_severity_source": str(latest.get("regime_severity_source", "NONE")),
                 "regime_status": regime_status,
                 "hysteresis_days_left": h_days,
                 "conflict_note": conflict_note,
-                "oil_event_active": bool(weights_live.get("commodity_event_active", False)),
                 "oil_ret_20d_z": round(float(latest.get("oil_ret_20d_z", 0.0)), 2),
                 "freight_lvl_z": round(float(latest.get("freight_lvl_z", 0.0)), 2),
                 "hy_oas_z": round(float(latest.get("hy_oas_z", 0.0)), 2),
@@ -567,6 +653,8 @@ class UltimateSentinelEngine:
                 "vix_z": round(float(latest.get("vix_z", 0.0)), 2),
                 "vix_percentile_252": round(float(latest.get("vix_percentile_252", 50.0)), 1),
                 "tips_1d_z": round(float(latest.get("tips_1d_z", 0.0)), 2),
+                "tips_level_z": round(float(latest.get("tips_level_z", 0.0)), 2),
+                "tips_level_percentile_252": round(float(latest.get("tips_level_percentile_252", 50.0)), 1),
                 "t10yie_z": round(float(latest.get("t10yie_z", 0.0)), 2),
                 "ndl_z": round(float(latest.get("ndl_z", 0.0)), 2),
                 "data_health_status": str(health["status"]),
@@ -579,20 +667,43 @@ class UltimateSentinelEngine:
                 "eia_inventory_source": "EIA_API:WCESTUS1" if not eia_crude_stocks.empty else "unavailable",
             },
         )
+        audit_cfg = self.regime_engine.config.get("self_learning", {})
+        audit = _daily_audit(
+            history,
+            result,
+            min_events=int(audit_cfg.get("minimum_completed_event_observations", 10)),
+        )
+        result.update({
+            "daily_audit_status": audit["status"],
+            "audit_completed_oil_events_5d": audit["completed_events"],
+            "audit_oil_positive_rate_5d": audit["positive_rate_5d"],
+            "audit_completed_structural_events_5d": audit["structural_events"],
+            "audit_structural_positive_rate_5d": audit["structural_positive_rate_5d"],
+            "audit_completed_momentum_events_5d": audit["momentum_events"],
+            "audit_momentum_positive_rate_5d": audit["momentum_positive_rate_5d"],
+        })
+        return result
 
     def _make_result(self, now, health, api_status, weights, source, previous_date, history, extra=None):
         w = self.regime_engine._normalize_weights(weights)
         result = {
             "date": now.strftime("%Y-%m-%d %H:%M"),
             "api_status": api_status,
-            "decision_status": "LIVE" if source == "LIVE_ENGINE" else "HOLD_LAST_VALID",
+            "decision_status": (
+                "LIVE" if source == "LIVE_ENGINE"
+                else "MARKET_CLOSED_HOLD" if source == "MARKET_CLOSED_HOLD"
+                else "HOLD_LAST_VALID"
+            ),
             "allocation_source": source,
             "previous_valid_date": previous_date,
             "emergency": False,
             "cms": 0.0,
             "ndl": 0.0,
-            "g3_liq": 0.0,
+            "g3_liq": np.nan,
             "active_growth_name": "N/A",
+            "oil_price": np.nan,
+            "brent_price": np.nan,
+            "spx_price": np.nan,
             "copper_gold": 0.0,
             "vix": 0.0,
             "real_rate": 0.0,
@@ -618,18 +729,37 @@ class UltimateSentinelEngine:
             "oil_momentum_score": float(weights.get("oil_momentum_score", 0.0)),
             "oil_structural_score": float(weights.get("oil_structural_score", 0.0)),
             "oil_event_type": str(weights.get("oil_event_type", "NONE")),
+            "oil_event_active": bool(weights.get("oil_event_active", False)),
             "commodity_event_active": bool(weights.get("commodity_event_active", False)),
             "commodity_event_reason": str(weights.get("commodity_event_reason", "")),
             "unknown_event_score": float(weights.get("unknown_event_score", 0.0)),
             "unknown_event_active": bool(weights.get("unknown_event_active", False)),
+            "unknown_guard_active": bool(weights.get("unknown_guard_active", False)),
             "oil_event_quality_60d": 0.5,
             "commodity_breadth_20d": 0.0,
             "ml_confidence": 0,
             "regime_id": 0,
-            "regime_name": "DATA_HALT" if source != "LIVE_ENGINE" else "REJIMSIZ_GECIS",
-            "regime_type": "DATA_FAILURE" if source != "LIVE_ENGINE" else "TRANSITION",
-            "regime_subtype": "Last valid allocation retained." if source != "LIVE_ENGINE" else "Dengeli / Nötr Piyasa",
-            "regime_status": "DATA HALT / LAST VALID ALLOCATION" if source != "LIVE_ENGINE" else "REJİMSİZ GEÇİŞ / EVENT MONITOR",
+            "regime_name": (
+                "MARKET_CLOSED" if source == "MARKET_CLOSED_HOLD"
+                else "DATA_HALT" if source != "LIVE_ENGINE"
+                else "REJIMSIZ_GECIS"
+            ),
+            "regime_type": (
+                "MARKET_CLOSED" if source == "MARKET_CLOSED_HOLD"
+                else "DATA_FAILURE" if source != "LIVE_ENGINE"
+                else "TRANSITION"
+            ),
+            "regime_subtype": (
+                "Market closed; previous valid allocation retained." if source == "MARKET_CLOSED_HOLD"
+                else "Last valid allocation retained." if source != "LIVE_ENGINE"
+                else "Dengeli / Nötr Piyasa"
+            ),
+            "regime_severity_source": "NONE",
+            "regime_status": (
+                "MARKET CLOSED / PREVIOUS VALID ALLOCATION" if source == "MARKET_CLOSED_HOLD"
+                else "DATA HALT / LAST VALID ALLOCATION" if source != "LIVE_ENGINE"
+                else "REJİMSİZ GEÇİŞ / EVENT MONITOR"
+            ),
             "hysteresis_days_left": 0,
             "conflict_note": "; ".join(health.get("issues", [])),
             "freight_lvl_z": 0.0,
@@ -641,6 +771,8 @@ class UltimateSentinelEngine:
             "vix_z": 0.0,
             "vix_percentile_252": 50.0,
             "tips_1d_z": 0.0,
+            "tips_level_z": 0.0,
+            "tips_level_percentile_252": 50.0,
             "t10yie_z": 0.0,
             "ndl_z": 0.0,
             "data_health_status": str(health.get("status", "HALT")),
@@ -651,6 +783,13 @@ class UltimateSentinelEngine:
             "brent_price_source": "unavailable",
             "vix3m_source": "unavailable",
             "eia_inventory_source": "unavailable",
+            "daily_audit_status": "INSUFFICIENT_HISTORY",
+            "audit_completed_oil_events_5d": 0,
+            "audit_oil_positive_rate_5d": np.nan,
+            "audit_completed_structural_events_5d": 0,
+            "audit_structural_positive_rate_5d": np.nan,
+            "audit_completed_momentum_events_5d": 0,
+            "audit_momentum_positive_rate_5d": np.nan,
             "cash_weight": round(w["cash"], 4),
             "gold_weight": round(w["gold"], 4),
             "bond_weight": round(w["bond"], 4),
@@ -661,7 +800,58 @@ class UltimateSentinelEngine:
         if extra:
             result.update(extra)
         result["allocation_total"] = round(sum(result[k] for k in ["cash_weight", "gold_weight", "bond_weight", "eq_weight", "commodity_weight", "crypto_weight"]), 4)
+        result.setdefault("daily_audit_status", "INSUFFICIENT_HISTORY")
+        result.setdefault("audit_completed_oil_events_5d", 0)
+        result.setdefault("audit_oil_positive_rate_5d", np.nan)
+        result.setdefault("audit_completed_structural_events_5d", 0)
+        result.setdefault("audit_structural_positive_rate_5d", np.nan)
+        result.setdefault("audit_completed_momentum_events_5d", 0)
+        result.setdefault("audit_momentum_positive_rate_5d", np.nan)
         return result
+
+
+
+def _daily_audit(history: pd.DataFrame, current_result: Dict[str, object], min_events: int = 10) -> Dict[str, object]:
+    """Post-outcome audit only; never feeds future data back into today's decision."""
+    current = pd.DataFrame([current_result])
+    hist = history.copy() if history is not None else pd.DataFrame()
+
+    required = ["oil_price", "oil_event_score", "oil_momentum_score", "oil_structural_score"]
+    if not hist.empty:
+        hist = hist.reindex(columns=required)
+        current = current.reindex(columns=required)
+        combined = pd.concat([hist, current], ignore_index=True)
+    else:
+        combined = current.reindex(columns=required).copy()
+
+    if not all(c in combined.columns for c in required):
+        return {"status": "UNAVAILABLE", "events": 0, "completed_events": 0, "positive_rate_5d": np.nan, "structural_positive_rate_5d": np.nan, "momentum_positive_rate_5d": np.nan}
+
+    prices = pd.to_numeric(combined["oil_price"], errors="coerce")
+    fwd5 = prices.shift(-5) / prices - 1.0
+    completed = fwd5.notna()
+
+    def audit(mask):
+        m = mask & completed
+        n = int(m.sum())
+        if n == 0:
+            return 0, np.nan
+        return n, float((fwd5[m] > 0).mean())
+
+    event_n, event_rate = audit(pd.to_numeric(combined["oil_event_score"], errors="coerce") >= 0.20)
+    structural_n, structural_rate = audit(pd.to_numeric(combined["oil_structural_score"], errors="coerce") >= 0.20)
+    momentum_n, momentum_rate = audit(pd.to_numeric(combined["oil_momentum_score"], errors="coerce") >= 0.20)
+    status = "INSUFFICIENT_HISTORY" if event_n < min_events else "TRACKING"
+    return {
+        "status": status,
+        "events": event_n,
+        "completed_events": event_n,
+        "positive_rate_5d": event_rate,
+        "structural_events": structural_n,
+        "structural_positive_rate_5d": structural_rate,
+        "momentum_events": momentum_n,
+        "momentum_positive_rate_5d": momentum_rate,
+    }
 
 
 def append_history(result: Dict[str, object]):
