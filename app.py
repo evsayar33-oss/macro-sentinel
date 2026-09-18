@@ -117,7 +117,8 @@ weights = {
 allocation_total = sum(v for v in weights.values() if np.isfinite(v))
 
 oil_score = fnum(latest, "oil_event_score", 0.0)
-oil_active = bval(latest, "commodity_event_active")
+oil_active = bval(latest, "oil_event_active")
+oil_overlay_applied = bval(latest, "commodity_event_active")
 oil_momentum = fnum(latest, "oil_momentum_score", 0.0)
 oil_structural = fnum(latest, "oil_structural_score", 0.0)
 oil_event_type = text_or(latest, "oil_event_type", "NONE")
@@ -131,17 +132,27 @@ if health == "HALT":
     health_label = "🔴 HALT"
     decision_health = "BLOCKED"
     health_color = "bad"
+elif health == "MARKET_CLOSED":
+    health_label = "🔵 MARKET CLOSED · HOLD"
+    decision_health = "HOLD"
+    health_color = "accent"
 elif issues:
     health_label = "🟠 DEGRADED · KRİTİK VERİ"
     decision_health = "CAUTION" if decision == "LIVE" else decision
     health_color = "warn"
 else:
     health_label = "🟢 HEALTHY" if health == "HEALTHY" else "🟡 DEGRADED · İKİNCİL VERİ"
-    # Missing optional/secondary data does not invalidate a live decision.
     decision_health = "VALID" if decision == "LIVE" else decision
     health_color = "ok" if health == "HEALTHY" else "warn"
 
-hero_color = "#ff5252" if regime_type == "SHOCK" else "#00e676" if regime_type == "RISK_ON" else "#ffd600"
+if regime_type == "SHOCK":
+    hero_color = "#ff5252"
+elif regime_type == "RISK_ON":
+    hero_color = "#00e676"
+elif regime_type == "CONSTRAINT":
+    hero_color = "#ffd166"
+else:
+    hero_color = "#ffd600"
 
 st.title("🏛️ Macro Sentinel")
 st.caption("Point-in-time makro rejim + bağımsız olay sensörleri + fail-closed allocation")
@@ -225,10 +236,11 @@ with struct_c4:
     st.metric("Yüksek Seviye Sürekliliği", ratio_pct(persist))
 
 if oil_active:
+    overlay_note = "Allocation overlay uygulandı." if oil_overlay_applied else "Event aktif fakat allocation overlay uygulanmadı (rejim/floor kuralı)."
     st.info(
         f"🛢️ Petrol olayı aktif — {oil_event_type}. "
         f"Momentum {oil_momentum:.2f} / Yapısal {oil_structural:.2f}. "
-        f"Emtia: {pct(weights['Emtia'])}. {text_or(latest, 'commodity_event_reason', '')}"
+        f"Emtia: {pct(weights['Emtia'])}. {overlay_note} {text_or(latest, 'commodity_event_reason', '')}"
     )
 else:
     st.caption(
@@ -265,6 +277,8 @@ st.subheader("🧠 Bu Rejim Neden Aktif?")
 regime_reason = []
 regime_reason.append(f"Rejim ID: {regime_id} — {regime_name}")
 regime_reason.append(f"Alt tip: {regime_subtype}")
+severity_source = text_or(latest, "regime_severity_source", "NONE")
+regime_reason.append(f"Rejim şiddet kaynağı: {severity_source}")
 conflict_note = text_or(latest, "conflict_note", "Açıklama kaydı yok.")
 regime_reason.append(f"Karar motoru açıklaması: {conflict_note}")
 for line in regime_reason:
@@ -275,7 +289,8 @@ sensor_rows = [
     ["Petrol 5g Getiri", zfmt(fnum(latest, "oil_ret_5d_z")), "Olay katmanı"],
     ["Petrol 20g Getiri", zfmt(fnum(latest, "oil_ret_20d_z")), "Olay katmanı"],
     ["Petrol 5g Anomali Persentili", f"{fnum(latest, 'oil_abs_5d_percentile', 50.0):.1f}", "Uyarlanabilir eşik"],
-    ["Petrol Fiyat Persentili 252g", f"{fnum(latest, 'oil_level_percentile_252', 0.0):.1f}", "Yapısal seviye"],
+    ["Petrol Fiyat Persentili 252g", f"{fnum(latest, 'oil_level_percentile_252', 0.0):.1f}", "Kısa/orta vadeli seviye"],
+    ["Petrol Fiyat Persentili 756g", f"{fnum(latest, 'oil_level_percentile_756', 0.0):.1f}", "Yapısal seviye (~3 yıl)"],
     ["Petrol Yüksek-Seviye Sürekliliği", ratio_pct(fnum(latest, 'oil_high_level_persistence_60d', 0.0)), "Yapısal süreklilik"],
     ["Brent Fiyat Persentili 252g", f"{fnum(latest, 'brent_level_percentile_252', 0.0):.1f}", "İkinci petrol benchmarkı"],
     ["Brent-WTI Spread", f"{fnum(latest, 'brent_wti_spread', 0.0):.2f}", "Bölgesel dislokasyon"],
@@ -294,7 +309,9 @@ sensor_rows = [
     ["Hisse/Tahvil Korelasyonu", f"{fnum(latest, 'spx_bond_corr', 0.0):.2f}", "R1 teyit"],
     ["DXY 5g", zfmt(fnum(latest, "broad_dollar_5d_z")), "Likidite/carry"],
     ["USDJPY 1g", zfmt(fnum(latest, "usdjpy_1d_z")), "Carry"],
-    ["10Y TIPS 1g", zfmt(fnum(latest, "tips_1d_z")), "Reel faiz"],
+    ["10Y TIPS 1g", zfmt(fnum(latest, "tips_1d_z")), "Reel faiz günlük şok"],
+    ["10Y TIPS Seviye Z", zfmt(fnum(latest, "tips_level_z")), "Reel faiz kalıcı baskı"],
+    ["10Y TIPS Persentili", f"{fnum(latest, 'tips_level_percentile_252', 50.0):.1f}", "Reel faiz seviye dağılımı"],
     ["T10YIE", zfmt(fnum(latest, "t10yie_z")), "Enflasyon beklentisi"],
     ["NDL", zfmt(fnum(latest, "ndl_z")), "Likidite"],
     ["VIX", zfmt(fnum(latest, "vix_z")), "Volatilite"],
@@ -310,6 +327,20 @@ source_rows = [
     ["EIA crude inventory", text_or(latest, "eia_inventory_source", "Kullanılmıyor / key yok")],
 ]
 st.dataframe(pd.DataFrame(source_rows, columns=["Sensör", "Aktif kaynak"]), use_container_width=True, hide_index=True)
+
+
+st.subheader("🔎 Günlük Model Kalitesi Denetimi")
+audit_rows = [
+    ["Audit durumu", text_or(latest, "daily_audit_status", "INSUFFICIENT_HISTORY")],
+    ["Tamamlanan petrol event'i", text_or(latest, "audit_completed_oil_events_5d", "0")],
+    ["Petrol event 5g pozitif takip", "—" if not np.isfinite(fnum(latest, "audit_oil_positive_rate_5d", np.nan)) else ratio_pct(fnum(latest, "audit_oil_positive_rate_5d"))],
+    ["Tamamlanan yapısal event", text_or(latest, "audit_completed_structural_events_5d", "0")],
+    ["Yapısal event 5g pozitif takip", "—" if not np.isfinite(fnum(latest, "audit_structural_positive_rate_5d", np.nan)) else ratio_pct(fnum(latest, "audit_structural_positive_rate_5d"))],
+    ["Tamamlanan momentum event", text_or(latest, "audit_completed_momentum_events_5d", "0")],
+    ["Momentum event 5g pozitif takip", "—" if not np.isfinite(fnum(latest, "audit_momentum_positive_rate_5d", np.nan)) else ratio_pct(fnum(latest, "audit_momentum_positive_rate_5d"))],
+]
+st.dataframe(pd.DataFrame(audit_rows, columns=["Kontrol", "Değer"]), use_container_width=True, hide_index=True)
+st.caption("Bu audit yalnızca gerçekleşmiş geçmiş event'lerin sonraki 5 işlem günündeki sonuçlarını ölçer; bugünkü kararı geriye dönük olarak değiştirmez.")
 
 st.subheader("🛡️ Veri Sağlığı ve Fail-Closed")
 health_rows = [
