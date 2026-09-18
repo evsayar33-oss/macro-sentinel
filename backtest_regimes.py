@@ -233,8 +233,44 @@ def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-
     return df
 
 
+def validate_engine_invariants(df: pd.DataFrame) -> Dict[str, Any]:
+    """Validate semantic invariants before using research results."""
+    weight_cols = [
+        "regime_cash_weight", "regime_gold_weight", "regime_bond_weight",
+        "regime_eq_weight", "regime_commodity_weight", "regime_crypto_weight"
+    ]
+    totals = df[weight_cols].sum(axis=1)
+    if not np.allclose(totals.values, 100.0, atol=0.05):
+        raise ValueError("Allocation integrity failure")
+
+    oil_active = df.get("oil_event_active", pd.Series(False, index=df.index)).astype(bool)
+    oil_type = df.get("oil_event_type", pd.Series("NONE", index=df.index)).astype(str).str.upper()
+    oil_score = pd.to_numeric(df.get("oil_event_score", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    structural = pd.to_numeric(df.get("oil_structural_score", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    structural_qualified = df.get("oil_structural_qualified", pd.Series(False, index=df.index)).astype(bool)
+
+    confirmed_types = {"MOMENTUM", "STRUCTURAL", "COMBINED"}
+    if bool((oil_active & ~oil_type.isin(list(confirmed_types))).any()):
+        raise ValueError("Oil event active without confirmed event type")
+    if bool((~oil_active & oil_type.isin(list(confirmed_types))).any()):
+        raise ValueError("Oil event type says confirmed while oil_event_active is false")
+    if bool(((oil_type == "STRUCTURAL") & ~structural_qualified).any()):
+        raise ValueError("STRUCTURAL event without structural qualification")
+    if bool((oil_score < -1e-9).any()) or bool((oil_score > 1.0 + 1e-9).any()):
+        raise ValueError("Oil event score outside [0,1]")
+    if bool((structural < -1e-9).any()) or bool((structural > 1.0 + 1e-9).any()):
+        raise ValueError("Oil structural score outside [0,1]")
+
+    return {
+        "allocation_integrity": True,
+        "oil_event_semantics": True,
+        "structural_qualification_semantics": True,
+    }
+
+
 def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     df = df_classified.copy()
+    invariants = validate_engine_invariants(df)
 
     weight_cols = [
         "regime_cash_weight", "regime_gold_weight", "regime_bond_weight",
@@ -242,9 +278,6 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     ]
     if not all(c in df.columns for c in weight_cols):
         raise ValueError("Backtest is missing regime allocation columns")
-    allocation_sum = df[weight_cols].sum(axis=1)
-    if not np.allclose(allocation_sum.values, 100.0, atol=0.05):
-        raise ValueError("Backtest allocation integrity failure: weights do not sum to 100%")
 
     spx_ret = df['spx'].pct_change().fillna(0.0)
     bond_ret = df['ust10y'].pct_change().fillna(0.0)
@@ -336,7 +369,13 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     carry_detected = (carry_bars['confirmed_regime_id'] == 2).any()
 
     structural_oil_bars = df.loc["2022-02-01":"2022-06-30"]
-    structural_oil_detected = (structural_oil_bars['oil_structural_score'] >= 0.20).any() if 'oil_structural_score' in structural_oil_bars.columns else False
+    if 'oil_event_active' in structural_oil_bars.columns and 'oil_event_type' in structural_oil_bars.columns:
+        structural_oil_detected = (
+            structural_oil_bars['oil_event_active'].astype(bool)
+            & structural_oil_bars['oil_event_type'].astype(str).str.upper().isin(['STRUCTURAL', 'COMBINED'])
+        ).any()
+    else:
+        structural_oil_detected = False
 
     regime_counts = df['confirmed_regime_name'].value_counts(normalize=True) * 100.0
     regime_dist = {str(k): round(float(v), 1) for k, v in regime_counts.items()}
@@ -347,6 +386,7 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
         "benchmark_artemis_dragon": art_metrics,
         "benchmark_taleb_barbell": taleb_metrics,
         "regime_distribution": regime_dist,
+        "invariants": invariants,
         "crisis_details": {
             "covid_2020_detected": bool(covid_detected),
             "stagflation_2022_detected": bool(stagflation_detected),
@@ -415,6 +455,7 @@ def main():
         },
     ])
     print(perf_summary.to_string(index=False))
+    print("\nModel invariants:", bt["invariants"])
 
     config = engine.load_config()
     config["backtest_metrics"] = {
