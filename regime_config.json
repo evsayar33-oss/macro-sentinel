@@ -1,7 +1,7 @@
 {
   "system_architecture": {
     "module_name": "macro-event-interpretation-system",
-    "version": "2.3",
+    "version": "2.4",
     "principles": {
       "mutual_exclusivity": true,
       "active_regime_count": 1,
@@ -16,7 +16,9 @@
       "trailing_reference_excludes_current_observation": true,
       "metadata_preservation": true,
       "market_closed_hold": true,
-      "single_source_of_truth_for_allocation": "regime_config.json"
+      "single_source_of_truth_for_allocation": "regime_config.json",
+      "switch_confirmation_observations": 2,
+      "allocation_source_of_truth": "regimes[].default_allocation"
     }
   },
   "priority_rules": {
@@ -24,14 +26,14 @@
       "SHOCK_REGIMES (1, 2, 3, 4)",
       "RISK_ON_REGIME (5)"
     ],
-    "conflict_resolution": "IF multiple shock regimes trigger, select the regime with the highest absolute Z-score of its main trigger indicator.",
+    "conflict_resolution": "Hard shock states first; then persistent real-rate constraint; otherwise risk-on. Within simultaneous hard shocks, highest absolute same-scale trigger Z wins.",
     "special_conflict_cases": [
       {
         "conflict": "Regime_1 vs Regime_3",
         "resolution": "IF T10YIE 52w_Z > +0.5 THEN Regime_1 ELSE Regime_3"
       }
     ],
-    "fallback_rule": "IF no threshold is met THEN state = 'REJIMSIZ_GECIS' AND retain previous confirmed regime (hysteresis)."
+    "fallback_rule": "If no named regime is confirmed, retain current state during hysteresis; a persistent-rate constraint is distinct from a daily rate shock."
   },
   "regimes": [
     {
@@ -45,15 +47,15 @@
             "indicator": "Petrol Şoku",
             "ticker": "Brent or WTI Spot",
             "formula": "20_day_return_52w_zscore",
-            "threshold": "Z > 1.5",
-            "threshold_val": 1.5
+            "threshold": "Z > 1.4 OR oil trend Z >= 2.0",
+            "threshold_val": 1.4
           },
           {
             "indicator": "Navlun/Ticaret Çöküşü",
             "ticker": "Baltic Dry Index (BDI)",
             "formula": "52w_zscore_level",
-            "threshold": "Z < -1.0",
-            "threshold_val": -1.0
+            "threshold": "Z < -0.9 OR Z > 1.5",
+            "threshold_val": -0.9
           }
         ]
       },
@@ -146,8 +148,8 @@
           {
             "indicator": "Ana Tetikleyici (Reel Faiz)",
             "ticker": "FRED:DFII10 (10Y TIPS)",
-            "formula": "1_day_change_52w_zscore",
-            "threshold": "Z > 1.4 OR persistent real-rate state",
+            "formula": "daily_change_trailing_z OR persistent_level_constraint",
+            "threshold": "daily Z > 1.4 OR TIPS >= 2.0% OR level Z > 1.0 OR level percentile >= 75",
             "threshold_val": 1.4
           },
           {
@@ -256,8 +258,8 @@
             "indicator": "Volatilite",
             "ticker": "VIX or MOVE",
             "formula": "252_day_percentile",
-            "threshold": "percentile < 30",
-            "threshold_val": 35.0
+            "threshold": "percentile < 32",
+            "threshold_val": 32.0
           },
           {
             "indicator": "Net Dolar Likiditesi",
@@ -313,12 +315,12 @@
     "strategy": {
       "name": "⚡ Macro Sentinel Dynamic",
       "allocation_desc": "Dinamik 6 Varlık (Rejim + Olay Katmanı)",
-      "annualized_return": 10.3,
-      "annualized_volatility": 3.67,
-      "sharpe_ratio": 1.99,
-      "max_drawdown": 8.75,
-      "calmar_ratio": 1.18,
-      "total_return": 141.13
+      "annualized_return": 9.17,
+      "annualized_volatility": 3.54,
+      "sharpe_ratio": 1.74,
+      "max_drawdown": 8.86,
+      "calmar_ratio": 1.03,
+      "total_return": 119.72
     },
     "benchmark_defensive_shield": {
       "name": "🛡️ Benchmark 1: Defensive Shield",
@@ -429,8 +431,19 @@
       ],
       "FRED_all_series": [
         "FRED_GRAPH_CSV"
+      ],
+      "ES=F": [
+        "FRED:SP500"
+      ],
+      "GC=F": [
+        "FRED:GOLDAMGBD228NLBM"
+      ],
+      "^VIX": [
+        "FRED:VIXCLS"
       ]
-    }
+    },
+    "core_requires_all": true,
+    "event_coverage_does_not_invalidate_core_decision": true
   },
   "event_overlay": {
     "oil": {
@@ -487,8 +500,15 @@
         "unqualified_multiplier": 0.35,
         "level_window_days": 756,
         "level_window_label": "~3 years",
-        "brent_level_window_days": 756
-      }
+        "brent_level_window_days": 756,
+        "pressure_level_percentile": 75.0,
+        "qualification_mode": "high_level_plus_persistence_or_supply_confirmation"
+      },
+      "momentum_activation_score": 0.2,
+      "structural_activation_score": 0.2,
+      "pressure_display_threshold": 0.2,
+      "allocation_requires_confirmed_event": true,
+      "event_score_semantics": "confirmed_event_only; pressure is reported separately as oil_pressure_score"
     },
     "unknown_event": {
       "enabled": true,
@@ -507,7 +527,7 @@
     "max_threshold_shift_pct": 10.0,
     "walk_forward_validation_required": true,
     "auto_commit_model_changes": false,
-    "description": "Daily system-health and event-quality audit is allowed; parameter changes are not auto-committed without out-of-sample validation.",
+    "description": "Daily post-outcome audit is diagnostic only. Threshold changes require separate out-of-sample validation.",
     "minimum_completed_event_observations": 10,
     "auto_threshold_update": false,
     "audit_uses_future_outcomes_only_for_past_events": true,
@@ -518,12 +538,24 @@
       "audit_structural_positive_rate_5d",
       "audit_completed_momentum_events_5d",
       "audit_momentum_positive_rate_5d"
-    ]
+    ],
+    "daily_audit_is_diagnostic_only": true,
+    "audit_uses_confirmed_events_only": true
   },
   "regime_semantics": {
     "r3_high_real_rate_floor": 2.0,
     "r3_daily_shock_label": "Reel Faiz Şoku",
     "r3_persistent_label": "Reel Faiz Kısıtlayıcı Rejimi",
-    "r3_priority": "hard_shocks_then_persistent_rate_constraint_then_risk_on"
+    "r3_priority": "hard_shocks_then_persistent_rate_constraint_then_risk_on",
+    "r3_high_real_rate_percentile_floor": 75.0,
+    "r3_severity_policy": "daily-change Z > threshold = SHOCK; persistent level without daily shock = CONSTRAINT; severity uses same-scale trailing Z"
+  },
+  "config_validation": {
+    "allocation_totals_valid": true,
+    "threshold_source": "calibrated_thresholds",
+    "allocation_source": "regimes[].default_allocation",
+    "event_score_semantics": "confirmed_only",
+    "pressure_score_separate": true,
+    "schema_version": "2.4"
   }
 }
