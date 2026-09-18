@@ -150,34 +150,65 @@ class PredictiveRiskEngine:
         return usable & eligible
 
     def deterioration_score(self, history: Optional[pd.DataFrame]) -> float:
-        """Immediate trend-break score based only on data through the current row."""
+        """Immediate trend-break score based only on data through the current row.
+
+        Missing lookback windows are treated as unavailable evidence, not as NaN
+        contributions. The returned score is always finite and bounded [0, 1].
+        """
         if history is None or len(history) < 30:
             return 0.0
+
         h = history.copy()
         series = []
         for col in ("spx_price", "gold_price", "oil_price", "btc_price"):
-            if col in h.columns:
-                s = pd.to_numeric(h[col], errors="coerce")
-                r20 = s.pct_change(20)
-                r60 = s.pct_change(60)
-                r100 = s.pct_change(100)
-                v20 = s.pct_change().rolling(20).std()
-                v60 = s.pct_change().rolling(60).std()
-                series.append(pd.DataFrame({
-                    "break": ((r20 < 0) & ((r60 > 0) | (r100 > 0))).astype(float),
-                    "vol": np.clip((v20 / (v60 + 1e-9) - 1.0) / 1.5, 0.0, 1.0),
-                    "dd": np.clip(-(s / s.rolling(126, min_periods=30).max() - 1.0) / 0.20, 0.0, 1.0),
-                }, index=h.index))
+            if col not in h.columns:
+                continue
+
+            s = pd.to_numeric(h[col], errors="coerce")
+            r1 = s.pct_change()
+            r20 = s.pct_change(20)
+            r60 = s.pct_change(60)
+            r100 = s.pct_change(100)
+            v20 = r1.rolling(20, min_periods=10).std()
+            v60 = r1.rolling(60, min_periods=20).std()
+            rolling_peak = s.rolling(126, min_periods=30).max()
+
+            break_signal = ((r20 < 0) & ((r60 > 0) | (r100 > 0))).astype(float)
+            vol_ratio = v20 / (v60 + 1e-9)
+            vol_signal = np.clip((vol_ratio - 1.0) / 1.5, 0.0, 1.0)
+            dd_signal = np.clip(
+                -(s / (rolling_peak + 1e-9) - 1.0) / 0.20,
+                0.0,
+                1.0,
+            )
+
+            series.append(pd.DataFrame({
+                "break": break_signal,
+                "vol": vol_signal,
+                "dd": dd_signal,
+            }, index=h.index))
+
         if not series:
             return 0.0
+
         panel = pd.concat(series, axis=1)
-        latest = panel.iloc[-1].dropna()
-        if latest.empty:
+        latest = panel.iloc[-1]
+
+        def finite_mean(values: pd.Series) -> float:
+            arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+            finite = arr[np.isfinite(arr)]
+            return float(finite.mean()) if finite.size else 0.0
+
+        # Average each component only across evidence that is actually mature
+        # at the current timestamp. This prevents a missing 60/100-day window
+        # from poisoning the whole deterioration score with NaN.
+        break_mean = finite_mean(latest.filter(like="break"))
+        vol_mean = finite_mean(latest.filter(like="vol"))
+        dd_mean = finite_mean(latest.filter(like="dd"))
+
+        score = 0.45 * break_mean + 0.30 * vol_mean + 0.25 * dd_mean
+        if not np.isfinite(score):
             return 0.0
-        # Equal contribution across asset diagnostics, still capped and interpretable.
-        score = 0.45 * float(panel.filter(like="break").iloc[-1].mean())
-        score += 0.30 * float(panel.filter(like="vol").iloc[-1].mean())
-        score += 0.25 * float(panel.filter(like="dd").iloc[-1].mean())
         return float(np.clip(score, 0.0, 1.0))
 
     def _smoothed_probability(self, successes: int, total: int, prior: float) -> float:
