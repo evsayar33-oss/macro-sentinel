@@ -557,5 +557,76 @@
     "event_score_semantics": "confirmed_only",
     "pressure_score_separate": true,
     "schema_version": "2.4"
+  },
+  "research_strategies": {
+    "enabled": true,
+    "auto_deploy": false,
+    "purpose": "Return-seeking research candidates; never replace live allocation without real-data walk-forward validation.",
+    "default_candidate": "adaptive_opportunity_btc",
+    "synthetic_evaluation_seeds": [
+      7,
+      19,
+      42
+    ],
+    "risk_budget_by_regime": {
+      "0": 0.6,
+      "1": 0.35,
+      "2": 0.08,
+      "3": 0.45,
+      "4": 0.25,
+      "5": 0.82
+    },
+    "trend_adjustments": {
+      "positive_20d_and_100d": 0.12,
+      "negative_20d_and_100d": -0.15,
+      "vix_pct_above_80": -0.18,
+      "vix_pct_below_30": 0.05
+    },
+    "btc_adjustments": {
+      "positive_60d": 0.06,
+      "negative_60d": -0.04
+    },
+    "risk_sleeve_weights": {
+      "equity": 0.62,
+      "gold": 0.14,
+      "commodity": 0.1,
+      "bond": 0.14,
+      "crypto": 0.1
+    },
+    "live_adoption_rule": "manual_after_real_market_walk_forward"
+  },
+  "research_strategy_metrics_single_seed": {
+    "Macro Sentinel Dynamic": {
+      "annualized_return": 9.17,
+      "annualized_volatility": 3.54,
+      "sharpe_ratio": 1.74,
+      "max_drawdown": 8.86,
+      "calmar_ratio": 1.03,
+      "total_return": 119.72
+    },
+    "Research: Adaptive Opportunity": {
+      "annualized_return": 10.95,
+      "annualized_volatility": 4.32,
+      "sharpe_ratio": 1.84,
+      "max_drawdown": 5.64,
+      "calmar_ratio": 1.94,
+      "total_return": 154.1
+    },
+    "Research: Adaptive Opportunity + BTC": {
+      "annualized_return": 13.14,
+      "annualized_volatility": 4.87,
+      "sharpe_ratio": 2.08,
+      "max_drawdown": 6.13,
+      "calmar_ratio": 2.14,
+      "total_return": 202.79
+    },
+    "Research: Balanced Trend": {
+      "annualized_return": 10.99,
+      "annualized_volatility": 4.41,
+      "sharpe_ratio": 1.81,
+      "max_drawdown": 5.93,
+      "calmar_ratio": 1.85,
+      "total_return": 154.91
+    }
   }
 }

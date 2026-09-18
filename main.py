@@ -612,6 +612,7 @@ class UltimateSentinelEngine:
                 "oil_structural_score": float(weights_live.get("oil_structural_score", 0.0)),
                 "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
                 "oil_event_active": bool(weights_live.get("oil_event_active", False)),
+                "oil_qualification_reason": str(event_snapshot.get("oil_qualification_reason", "")),
                 "commodity_event_active": False,
                 "commodity_event_reason": "Emergency liquidity override active.",
                 "unknown_event_score": float(weights_live.get("unknown_event_score", 0.0)),
@@ -619,6 +620,21 @@ class UltimateSentinelEngine:
             }
         else:
             weights_live = self.regime_engine._normalize_weights(weights_live)
+
+        # Canonicalize the event metadata from a fresh engine snapshot after all
+        # allocation/normalization operations. This prevents a stale or partially
+        # normalized event field from disagreeing with the actual event state.
+        event_snapshot = self.regime_engine.get_event_snapshot(latest)
+        weights_live.update({
+            "oil_pressure_score": float(event_snapshot.get("oil_pressure_score", 0.0)),
+            "oil_event_score": float(event_snapshot.get("oil_event_score", 0.0)),
+            "oil_momentum_score": float(event_snapshot.get("oil_momentum_score", 0.0)),
+            "oil_structural_score": float(event_snapshot.get("oil_structural_score", 0.0)),
+            "oil_structural_qualified": bool(event_snapshot.get("oil_structural_qualified", False)),
+            "oil_momentum_confirmed": bool(event_snapshot.get("oil_momentum_confirmed", False)),
+            "oil_event_type": str(event_snapshot.get("oil_event_type", "NONE")),
+            "oil_event_active": bool(event_snapshot.get("oil_event_active", False)),
+        })
 
         ml_confidence = int(np.clip(70.0 + float(np.nan_to_num(cms)) * 12.0, 20.0, 95.0))
         pmi_val = float(raw["pmi"].iloc[-1]) if not raw["pmi"].empty else 50.0
@@ -670,6 +686,7 @@ class UltimateSentinelEngine:
                 "oil_momentum_confirmed": bool(weights_live.get("oil_momentum_confirmed", False)),
                 "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
                 "oil_event_active": bool(weights_live.get("oil_event_active", False)),
+                "oil_qualification_reason": str(event_snapshot.get("oil_qualification_reason", "")),
                 "commodity_event_active": bool(weights_live.get("commodity_event_active", False)),
                 "commodity_event_reason": str(weights_live.get("commodity_event_reason", "")),
                 "unknown_event_score": round(float(weights_live.get("unknown_event_score", 0.0)), 3),
@@ -777,6 +794,7 @@ class UltimateSentinelEngine:
             "oil_momentum_confirmed": bool(weights.get("oil_momentum_confirmed", False)),
             "oil_event_type": str(weights.get("oil_event_type", "NONE")),
             "oil_event_active": bool(weights.get("oil_event_active", False)),
+            "oil_qualification_reason": str(weights.get("oil_qualification_reason", "")),
             "commodity_event_active": bool(weights.get("commodity_event_active", False)),
             "commodity_event_reason": str(weights.get("commodity_event_reason", "")),
             "unknown_event_score": float(weights.get("unknown_event_score", 0.0)),

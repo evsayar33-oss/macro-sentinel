@@ -851,6 +851,7 @@ class MacroRegimeEngine:
             "oil_momentum_confirmed": oil_snapshot["momentum_confirmed"],
             "oil_event_type": oil_snapshot["event_type"],
             "oil_event_active": oil_snapshot["event_active"],
+            "oil_qualification_reason": oil_snapshot["qualification_reason"],
             "commodity_event_active": False,
             "commodity_event_reason": "No confirmed commodity event overlay active.",
             "unknown_event_score": unknown_score,
@@ -923,7 +924,7 @@ class MacroRegimeEngine:
                 weights_map[rid] = allocation
         base = self._normalize_weights(weights_map.get(int(regime_id), weights_map[0]))
         if row is None:
-            base.update(oil_event_score=0.0, oil_momentum_score=0.0, oil_structural_score=0.0, oil_event_type="NONE", oil_event_active=False, commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False, unknown_guard_active=False)
+            base.update(oil_pressure_score=0.0, oil_event_score=0.0, oil_momentum_score=0.0, oil_structural_score=0.0, oil_structural_qualified=False, oil_momentum_confirmed=False, oil_event_type="NONE", oil_event_active=False, oil_qualification_reason="No live row supplied; regime weights only.", commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False, unknown_guard_active=False)
             return base
         return self._apply_event_overlays(base, row, int(regime_id))
 
