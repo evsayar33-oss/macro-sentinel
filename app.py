@@ -75,6 +75,10 @@ def zfmt(v):
     return "—" if not np.isfinite(v) else f"{v:.2f}σ"
 
 
+def ratio_pct(v):
+    return "—" if not np.isfinite(v) else f"%{v * 100.0:.0f}"
+
+
 if not os.path.exists(HISTORY_FILE):
     st.warning("cms_history.csv bulunamadı. GitHub Actions'ın ilk başarılı veri güncellemesini bekleyin.")
     st.stop()
@@ -125,11 +129,12 @@ if health == "HALT":
     decision_health = "BLOCKED"
     health_color = "bad"
 elif issues:
-    health_label = "🟠 DEGRADED"
-    decision_health = "CAUTION"
+    health_label = "🟠 DEGRADED · KRİTİK VERİ"
+    decision_health = "CAUTION" if decision == "LIVE" else decision
     health_color = "warn"
 else:
-    health_label = "🟢 HEALTHY" if health == "HEALTHY" else "🟡 DEGRADED"
+    health_label = "🟢 HEALTHY" if health == "HEALTHY" else "🟡 DEGRADED · İKİNCİL VERİ"
+    # Missing optional/secondary data does not invalidate a live decision.
     decision_health = "VALID" if decision == "LIVE" else decision
     health_color = "ok" if health == "HEALTHY" else "warn"
 
@@ -178,7 +183,7 @@ st.subheader("🎯 Ana Sensörler")
 metric_cols = st.columns(5)
 metric_values = [
     ("CMS", f"{fnum(latest, 'cms', 0.0):.2f}"),
-    ("Petrol Event", f"{oil_score:.2f}"),
+    ("Petrol Event", "AKTİF" if oil_active else "PASİF"),
     ("Petrol 20g", zfmt(fnum(latest, "oil_ret_20d_z"))),
     ("VIX Z", zfmt(fnum(latest, "vix_z"))),
     ("NDL Z", zfmt(fnum(latest, "ndl_z"))),
@@ -194,9 +199,11 @@ with oil_col:
 with unknown_col:
     st.metric("Unknown Anomaly", "AKTİF" if unknown_active else "PASİF", delta=f"Skor {unknown_score:.2f}")
 with breadth_col:
-    st.metric("Emtia Genişliği 20g", f"{fnum(latest, 'commodity_breadth_20d', 0.0):.2f}")
+    breadth = fnum(latest, "commodity_breadth_20d", 0.0)
+    st.metric("Emtia Genişliği 20g", ratio_pct(breadth), help="0–1 oranı yüzde olarak gösterilir.")
 with quality_col:
-    st.metric("Petrol Event Kalitesi", f"{fnum(latest, 'oil_event_quality_60d', 0.5):.2f}")
+    quality = fnum(latest, "oil_event_quality_60d", 0.5)
+    st.metric("Petrol Event Kalitesi", ratio_pct(quality), help="0–1 tarihsel kalite oranı yüzde olarak gösterilir.")
 
 if oil_active:
     st.info(
@@ -243,8 +250,10 @@ sensor_rows = [
     ["Petrol 5g Getiri", zfmt(fnum(latest, "oil_ret_5d_z")), "Olay katmanı"],
     ["Petrol 20g Getiri", zfmt(fnum(latest, "oil_ret_20d_z")), "Olay katmanı"],
     ["Petrol 5g Anomali Persentili", f"{fnum(latest, 'oil_abs_5d_percentile', 50.0):.1f}", "Uyarlanabilir eşik"],
-    ["Petrol Event Kalitesi", f"{fnum(latest, 'oil_event_quality_60d', 0.5):.2f}", "Tarihsel event başarısı"],
-    ["Emtia Genişliği 20g", f"{fnum(latest, 'commodity_breadth_20d', 0.0):.2f}", "Teyit"],
+    ["Petrol Event Durumu", ("AKTİF" if oil_active else "PASİF") + f" · skor {oil_score:.2f}", "Olay katmanı"],
+    ["Petrol Event Kalitesi", ratio_pct(fnum(latest, "oil_event_quality_60d", 0.5)), "Tarihsel event başarısı"],
+    ["Emtia Genişliği 20g", ratio_pct(fnum(latest, "commodity_breadth_20d", 0.0)), "Teyit"],
+    ["Unknown Anomaly", ("AKTİF" if unknown_active else "PASİF") + f" · skor {unknown_score:.2f}", "Anomali guard"],
     ["Navlun", zfmt(fnum(latest, "freight_lvl_z")), "Stagflasyon sensörü"],
     ["HY OAS", zfmt(fnum(latest, "hy_oas_z")), "Kredi stresi"],
     ["Hisse/Tahvil Korelasyonu", f"{fnum(latest, 'spx_bond_corr', 0.0):.2f}", "R1 teyit"],
@@ -260,7 +269,8 @@ st.dataframe(pd.DataFrame(sensor_rows, columns=["Sensör", "Değer", "Rol"]), us
 
 st.subheader("🛡️ Veri Sağlığı ve Fail-Closed")
 health_rows = [
-    ["Veri sağlığı", health],
+    ["Core veri sağlığı", "HALT" if health == "HALT" else "HEALTHY" if not issues else "DEGRADED"],
+    ["İkincil veri", "1+ uyarı" if warnings else "Tam"],
     ["Karar durumu", decision],
     ["Karar sağlığı", decision_health],
     ["Allocation kaynağı", source],
