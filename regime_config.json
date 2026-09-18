@@ -308,42 +308,42 @@
     "strategy": {
       "name": "⚡ Macro Sentinel Apex (Optimum)",
       "allocation_desc": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
-      "annualized_return": 16.32,
-      "annualized_volatility": 4.52,
-      "sharpe_ratio": 2.95,
-      "max_drawdown": 4.82,
-      "calmar_ratio": 3.39,
-      "total_return": 288.51
+      "annualized_return": 10.62,
+      "annualized_volatility": 3.66,
+      "sharpe_ratio": 2.08,
+      "max_drawdown": 8.16,
+      "calmar_ratio": 1.3,
+      "total_return": 147.35
     },
     "benchmark_defensive_shield": {
       "name": "🛡️ Benchmark 1: Defensive Shield",
       "allocation_desc": "%35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto",
-      "annualized_return": 9.87,
-      "annualized_volatility": 3.78,
-      "sharpe_ratio": 1.82,
-      "max_drawdown": 12.58,
-      "calmar_ratio": 0.79,
-      "total_return": 132.87
+      "annualized_return": 8.79,
+      "annualized_volatility": 3.76,
+      "sharpe_ratio": 1.54,
+      "max_drawdown": 14.49,
+      "calmar_ratio": 0.61,
+      "total_return": 112.95
     },
     "benchmark_artemis_dragon": {
       "name": "🐉 Benchmark 2: Artemis Dragon",
       "allocation_desc": "%25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto",
-      "annualized_return": 10.96,
-      "annualized_volatility": 5.22,
-      "sharpe_ratio": 1.52,
-      "max_drawdown": 20.63,
-      "calmar_ratio": 0.53,
-      "total_return": 154.25
+      "annualized_return": 10.02,
+      "annualized_volatility": 5.16,
+      "sharpe_ratio": 1.36,
+      "max_drawdown": 22.82,
+      "calmar_ratio": 0.44,
+      "total_return": 135.73
     },
     "benchmark_taleb_barbell": {
       "name": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
       "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
-      "annualized_return": 7.7,
-      "annualized_volatility": 2.27,
-      "sharpe_ratio": 2.07,
-      "max_drawdown": 3.41,
-      "calmar_ratio": 2.26,
-      "total_return": 94.69
+      "annualized_return": 6.35,
+      "annualized_volatility": 2.18,
+      "sharpe_ratio": 1.54,
+      "max_drawdown": 4.66,
+      "calmar_ratio": 1.36,
+      "total_return": 73.85
     },
     "crisis_recall_pct": 100.0
   },
@@ -392,7 +392,22 @@
       "dgs2",
       "dgs10",
       "t10yie"
-    ]
+    ],
+    "eia_max_stale_days": 14,
+    "secondary_fallbacks": {
+      "^VIX3M": [
+        "FRED:VXVCLS"
+      ],
+      "CL=F": [
+        "FRED:DCOILWTICO"
+      ],
+      "BZ=F": [
+        "FRED:DCOILBRENTEU"
+      ],
+      "crude_stocks": [
+        "EIA:WCESTUS1"
+      ]
+    }
   },
   "event_overlay": {
     "oil": {
@@ -425,6 +440,31 @@
         "3": 35.0,
         "4": 40.0,
         "5": 5.0
+      },
+      "structural": {
+        "enabled": true,
+        "level_soft_percentile": 80.0,
+        "level_hard_percentile": 95.0,
+        "level_weight": 0.35,
+        "brent_soft_percentile": 80.0,
+        "brent_hard_percentile": 95.0,
+        "brent_weight": 0.15,
+        "persistence_gate": 0.4,
+        "persistence_weight": 0.25,
+        "breadth_gate": 0.6,
+        "breadth_weight": 0.1,
+        "inventory_weight": 0.1,
+        "spread_weight": 0.05,
+        "spread_soft_percentile": 70.0,
+        "qualification_level_percentile": 85.0,
+        "qualification_persistence": 0.4,
+        "qualification_breadth": 0.6,
+        "qualification_inventory_draw_z": 1.0,
+        "qualification_spread_percentile": 85.0,
+        "unqualified_multiplier": 0.35,
+        "level_window_days": 756,
+        "level_window_label": "~3 years",
+        "brent_level_window_days": 756
       }
     },
     "unknown_event": {
