@@ -260,7 +260,7 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     w_cmd = (df['regime_commodity_weight'] / 100.0).shift(1).fillna(0.05)
     w_crp = (df['regime_crypto_weight'] / 100.0).shift(1).fillna(0.05)
 
-    # 1. Macro Sentinel Apex (Dynamic Optimum)
+    # 1. Macro Sentinel Dynamic (current regime + event architecture)
     strat_ret = (w_csh * cash_ret +
                  w_gld * gold_ret +
                  w_bnd * bond_ret +
@@ -359,7 +359,7 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
 
 def main():
     print("=" * 85)
-    print("🏛️ MACRO SENTINEL: APEX OPTİMİZASYON VE GENİŞLETİLMİŞ BENCHMARK SÜİTİ (2018 - 2026)")
+    print("🏛️ MACRO SENTINEL: DİNAMİK REJİM & OLAY BACKTEST SÜİTİ (2018 - 2026)")
     print("=" * 85)
 
     engine = MacroRegimeEngine()
@@ -369,18 +369,18 @@ def main():
     bt = run_portfolio_backtest(classified)
 
     print("\n" + "=" * 110)
-    print("📊 2018 - 2026 DÖNEMİ DOĞRULANMIŞ STRATEJİ & BENCHMARK KARŞILAŞTIRMA TABLOSU")
+    print("📊 2018 - 2026 DÖNEMİ TEST SONUÇLARI & BENCHMARK KARŞILAŞTIRMA TABLOSU")
     print("=" * 110)
 
     perf_summary = pd.DataFrame([
         {
-            "Portföy / Strateji": "⚡ Macro Sentinel Apex (Optimum)",
-            "Varlık Dağılım Mimarisi": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
+            "Portföy / Strateji": "⚡ Macro Sentinel Dynamic",
+            "Varlık Dağılım Mimarisi": "Dinamik 6 Varlık (Rejim + Olay Katmanı)",
             "Yıllık Getiri (%)": f"%{bt['strategy']['annualized_return']:.2f}",
             "Volatilite (%)": f"%{bt['strategy']['annualized_volatility']:.2f}",
-            "Sharpe": f"{bt['strategy']['sharpe_ratio']:.2f} (REKOR)",
-            "Max DD (%)": f"%{bt['strategy']['max_drawdown']:.2f} (KORUMA)",
-            "Calmar": f"{bt['strategy']['calmar_ratio']:.2f} (ZİRVE)",
+            "Sharpe": f"{bt['strategy']['sharpe_ratio']:.2f}",
+            "Max DD (%)": f"%{bt['strategy']['max_drawdown']:.2f}",
+            "Calmar": f"{bt['strategy']['calmar_ratio']:.2f}",
             "Toplam Getiri (%)": f"+%{bt['strategy']['total_return']:.2f}"
         },
         {
@@ -405,11 +405,11 @@ def main():
         },
         {
             "Portföy / Strateji": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
-            "Varlık Dağılım Mimarisi": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
+            "Varlık Dağılım Mimarisi": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto",
             "Yıllık Getiri (%)": f"%{bt['benchmark_taleb_barbell']['annualized_return']:.2f}",
             "Volatilite (%)": f"%{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f}",
             "Sharpe": f"{bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f}",
-            "Max DD (%)": f"%{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} (MİNİMUM)",
+            "Max DD (%)": f"%{bt['benchmark_taleb_barbell']['max_drawdown']:.2f}",
             "Calmar": f"{bt['benchmark_taleb_barbell']['calmar_ratio']:.2f}",
             "Toplam Getiri (%)": f"+%{bt['benchmark_taleb_barbell']['total_return']:.2f}"
         },
@@ -419,8 +419,8 @@ def main():
     config = engine.load_config()
     config["backtest_metrics"] = {
         "strategy": {
-            "name": "⚡ Macro Sentinel Apex (Optimum)",
-            "allocation_desc": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
+            "name": "⚡ Macro Sentinel Dynamic",
+            "allocation_desc": "Dinamik 6 Varlık (Rejim + Olay Katmanı)",
             **bt["strategy"]
         },
         "benchmark_defensive_shield": {
@@ -435,7 +435,7 @@ def main():
         },
         "benchmark_taleb_barbell": {
             "name": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
-            "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
+            "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto",
             **bt["benchmark_taleb_barbell"]
         },
         "crisis_recall_pct": 100.0
@@ -445,31 +445,42 @@ def main():
         json.dump(config, f, indent=2, ensure_ascii=False)
     print(f"\nSaved updated metrics to {engine.config_path}")
 
-    # Generate Report
-    report_md = f"""# Macro Sentinel Apex Çoklu Varlık Backtest & Strateji Optimizasyon Raporu (2018 - 2026)
+    # Generate a descriptive report. Synthetic results are not treated as live-performance evidence.
+    report_md = f"""# Macro Sentinel Dynamic — Backtest & Olay Doğrulama Raporu (2018 - 2026)
 
-## 1. Yönetici Özeti ve Zirve Verimlilik (Apex Optimizasyonu)
-Yapılan 10.000 patikalı Monte Carlo stres testleri ve parametrik hassasiyet analizleri sonucunda sistem **Macro Sentinel Apex** seviyesine yükseltilmiştir:
-* **Stagflasyon Şoklarında (Rejim 1):** Petrol & Emtia koruma kalkanı **%20'den %30'a** çıkarılmış, altının **%25** ve nakdin **%40** gücüyle 2022 benzeri krizlerdeki kazanç katlanmıştır.
-* **Risk-On Boğa Genişlemesinde (Rejim 5):** Pozitif konveksite motoru olarak **%10 Kripto (BTC)** ve **%70 Hisse (SPX)** entegrasyonuyla portföy büyümesi maksimize edilmiştir.
-* **Sonuç:** Toplam getiri **+%203.18'den +%229.19'a**, Yıllık getiri **%13.15'ten %14.19'a**, Sharpe oranı **2.72'den 2.81'e (REKOR)** ve Calmar oranı **2.20'den 2.52'ye (ZİRVE)** yükselmiştir. Max Drawdown ise **%5.63** ile daha da aşağı çekilmiştir.
+## 1. Kapsam
+Bu rapor, mevcut rejim + bağımsız olay katmanının sentetik tarihsel veri üreticisi üzerindeki davranışını özetler. Metrikler canlı piyasa performansı veya gelecekteki sonuçlar için garanti değildir.
 
----
+### Mevcut strateji metrikleri
+- Yıllıklandırılmış getiri: **%{bt['strategy']['annualized_return']:.2f}**
+- Yıllıklandırılmış volatilite: **%{bt['strategy']['annualized_volatility']:.2f}**
+- Sharpe: **{bt['strategy']['sharpe_ratio']:.2f}**
+- Maksimum düşüş: **%{bt['strategy']['max_drawdown']:.2f}**
+- Calmar: **{bt['strategy']['calmar_ratio']:.2f}**
+- Toplam getiri: **%{bt['strategy']['total_return']:.2f}**
 
-## 2. 2018 - 2026 Dönemi Doğrulanmış Tüm Strateji & Benchmark Sonuçları
+## 2. Rejim ve olay geri çağırma kontrolleri
+- 2020 likidite şoku: **{'DETECTED' if bt['crisis_details']['covid_2020_detected'] else 'NOT DETECTED'}**
+- 2022 stagflasyon: **{'DETECTED' if bt['crisis_details']['stagflation_2022_detected'] else 'NOT DETECTED'}**
+- 2022 reel faiz şoku: **{'DETECTED' if bt['crisis_details']['rate_shock_2022_detected'] else 'NOT DETECTED'}**
+- 2024 JPY carry olayı: **{'DETECTED' if bt['crisis_details']['jpy_carry_2024_detected'] else 'NOT DETECTED'}**
+- 2022 yapısal petrol olayı: **{'DETECTED' if bt['crisis_details']['oil_structural_event_2022_detected'] else 'NOT DETECTED'}**
 
-| Portföy / Benchmark | Varlık Çeşitlendirme Dağılımı | Yıllık Getiri (%) | Yıllık Risk (Volatilite) | Sharpe Oranı | Max Drawdown (%) | Calmar Oranı | Toplam Getiri (%) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| ⚡ **Macro Sentinel Apex (Optimum)** | **Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)** | **%{bt['strategy']['annualized_return']:.2f}** | **%{bt['strategy']['annualized_volatility']:.2f}** | **{bt['strategy']['sharpe_ratio']:.2f} (REKOR)** | **%{bt['strategy']['max_drawdown']:.2f} (KORUMA)** | **{bt['strategy']['calmar_ratio']:.2f} (ZİRVE)** | **+%{bt['strategy']['total_return']:.2f}** |
-| 🛡️ **Benchmark 1: Defensive Shield** | %35 Nakit / %20 Altın / %20 Tahvil / %15 Hisse / %5 Emtia / %5 Kripto | %{bt['benchmark_defensive_shield']['annualized_return']:.2f} | %{bt['benchmark_defensive_shield']['annualized_volatility']:.2f} | {bt['benchmark_defensive_shield']['sharpe_ratio']:.2f} | %{bt['benchmark_defensive_shield']['max_drawdown']:.2f} (Düşük Risk) | {bt['benchmark_defensive_shield']['calmar_ratio']:.2f} | +%{bt['benchmark_defensive_shield']['total_return']:.2f} |
-| 🐉 **Benchmark 2: Artemis Dragon** | %25 Hisse / %25 Nakit / %20 Altın / %15 Tahvil / %10 Emtia / %5 Kripto | %{bt['benchmark_artemis_dragon']['annualized_return']:.2f} | %{bt['benchmark_artemis_dragon']['annualized_volatility']:.2f} | {bt['benchmark_artemis_dragon']['sharpe_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['max_drawdown']:.2f} (Yüksek Büyüme) | {bt['benchmark_artemis_dragon']['calmar_ratio']:.2f} | +%{bt['benchmark_artemis_dragon']['total_return']:.2f} |
-| 🛡️ **Benchmark 3: Taleb Barbell Asymmetric** | %85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk) | %{bt['benchmark_taleb_barbell']['annualized_return']:.2f} | %{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f} | {bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} (MİNİMUM DD) | {bt['benchmark_taleb_barbell']['calmar_ratio']:.2f} | +%{bt['benchmark_taleb_barbell']['total_return']:.2f} |
+## 3. Benchmarklar
+Benchmarklar yalnızca karşılaştırmalı bağlam sağlar; sonuçlar veri üretim sürecine ve test varsayımlarına bağlıdır.
 
----
+| Strateji | Yıllık Getiri | Volatilite | Sharpe | Max DD | Calmar | Toplam Getiri |
+|---|---:|---:|---:|---:|---:|---:|
+| Macro Sentinel Dynamic | %{bt['strategy']['annualized_return']:.2f} | %{bt['strategy']['annualized_volatility']:.2f} | {bt['strategy']['sharpe_ratio']:.2f} | %{bt['strategy']['max_drawdown']:.2f} | {bt['strategy']['calmar_ratio']:.2f} | %{bt['strategy']['total_return']:.2f} |
+| Defensive Shield | %{bt['benchmark_defensive_shield']['annualized_return']:.2f} | %{bt['benchmark_defensive_shield']['annualized_volatility']:.2f} | {bt['benchmark_defensive_shield']['sharpe_ratio']:.2f} | %{bt['benchmark_defensive_shield']['max_drawdown']:.2f} | {bt['benchmark_defensive_shield']['calmar_ratio']:.2f} | %{bt['benchmark_defensive_shield']['total_return']:.2f} |
+| Artemis Dragon | %{bt['benchmark_artemis_dragon']['annualized_return']:.2f} | %{bt['benchmark_artemis_dragon']['annualized_volatility']:.2f} | {bt['benchmark_artemis_dragon']['sharpe_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['max_drawdown']:.2f} | {bt['benchmark_artemis_dragon']['calmar_ratio']:.2f} | %{bt['benchmark_artemis_dragon']['total_return']:.2f} |
+| Taleb Barbell Asymmetric | %{bt['benchmark_taleb_barbell']['annualized_return']:.2f} | %{bt['benchmark_taleb_barbell']['annualized_volatility']:.2f} | {bt['benchmark_taleb_barbell']['sharpe_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['max_drawdown']:.2f} | {bt['benchmark_taleb_barbell']['calmar_ratio']:.2f} | %{bt['benchmark_taleb_barbell']['total_return']:.2f} |
 
-## 3. Sisteme Eklenen Yeni Strateji: Taleb Barbell Asymmetric (Ultra Düşük Risk)
-* **Felsefe:** Nassim Nicholas Taleb'in "Antifragile" prensibi. Portföyün %85'i risksiz gecelik dolar faizinde (T-Bill / Repo) korunurken, %10'u kalıcı değer deposu Altın'da, %5'i ise sınırsız yukarı yönlü asimetrik getiri sağlayan dijital varlıkta (BTC) tutulur.
-* **Sonuç:** Max Drawdown sadece **%3.41** seviyesinde kalırken, risksiz faiz ve konveksite sayesinde **+%94.69** toplam getiri ve **2.07 Sharpe** üretmiştir. Sıfır risk toleransına sahip yatırımcılar için nihai koruma kalkanıdır.
+## 4. Yorumlama notları
+1. Sentetik veri üzerindeki geri çağırma, gerçek tarihsel yeniden oynatma ile aynı şey değildir.
+2. Sharpe, Calmar ve drawdown metrikleri tek başına model doğruluğunu kanıtlamaz.
+3. Yapısal petrol olayı ayrı bir event katmanı olarak değerlendirilir; named regime ile aynı kavram değildir.
+4. Gerçek model kalitesi için ileride walk-forward ve gerçek out-of-sample event outcome audit kullanılmalıdır.
 """
     with open("backtest_report.md", "w", encoding="utf-8") as f:
         f.write(report_md)
