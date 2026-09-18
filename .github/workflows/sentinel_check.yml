@@ -119,9 +119,16 @@ jobs:
                   raise SystemExit('OIL ACTIVE BUT EVENT TYPE IS NOT CONFIRMED')
               if oil_score < 0.20:
                   raise SystemExit('OIL ACTIVE BUT EVENT SCORE IS BELOW ACTIVATION')
+              expected_score = max(momentum, structural)
+              if abs(oil_score - expected_score) > 0.01:
+                  raise SystemExit('OIL EVENT SCORE IS INCONSISTENT WITH COMPONENT SCORES')
           else:
               if oil_type in confirmed_types:
                   raise SystemExit('OIL TYPE CLAIMS CONFIRMED EVENT BUT OIL_EVENT_ACTIVE IS FALSE')
+              if oil_type not in {'NONE', 'PRESSURE_ONLY'}:
+                  raise SystemExit('INACTIVE OIL STATE HAS INVALID EVENT TYPE')
+              if abs(oil_score) > 0.01:
+                  raise SystemExit('INACTIVE OIL EVENT MUST HAVE ZERO EVENT SCORE')
 
           if oil_type == 'STRUCTURAL' and not structural_qualified:
               raise SystemExit('STRUCTURAL EVENT REQUIRES STRUCTURAL QUALIFICATION')
