@@ -15,7 +15,7 @@ Runtime contract
 import json
 import os
 from datetime import datetime, timezone
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,7 @@ import yfinance as yf
 from regime_engine import MacroRegimeEngine
 
 FRED_API_KEY = os.getenv("FRED_API_KEY")
+EIA_API_KEY = os.getenv("EIA_API_KEY")
 HISTORY_FILE = "cms_history.csv"
 IST_TZ = pytz.timezone("Europe/Istanbul")
 
@@ -39,6 +40,7 @@ class UltimateSentinelEngine:
         self.min_history = int(data_cfg.get("minimum_history_days", 126))
         self.market_stale_days = int(data_cfg.get("market_max_stale_days", 3))
         self.fred_stale_days = int(data_cfg.get("fred_max_stale_days", 7))
+        self.eia_stale_days = int(data_cfg.get("eia_max_stale_days", 14))
 
     @staticmethod
     def _as_numeric_series(values, index=None):
@@ -95,6 +97,52 @@ class UltimateSentinelEngine:
             return series, {"ok": not series.empty, "reason": "ok" if not series.empty else "empty", "last_date": last_date, "count": int(series.shape[0])}
         except Exception as exc:
             return pd.Series(dtype=float), {"ok": False, "reason": str(exc)[:180], "last_date": None, "count": 0}
+
+    def fetch_eia_series(self, series_id: str, length: int = 260) -> Tuple[pd.Series, Dict[str, object]]:
+        """Optional direct EIA v2 fallback for weekly petroleum supply data."""
+        if not EIA_API_KEY:
+            return pd.Series(dtype=float), {"ok": False, "reason": "EIA_API_KEY missing", "last_date": None, "count": 0}
+        try:
+            url = "https://api.eia.gov/v2/petroleum/stoc/wstk/data/"
+            params = {
+                "api_key": EIA_API_KEY,
+                "frequency": "weekly",
+                "data[0]": "value",
+                "facets[series][]": series_id,
+                "sort[0][column]": "period",
+                "sort[0][direction]": "desc",
+                "length": length,
+            }
+            response = requests.get(url, params=params, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("response", {}).get("data", [])
+            if not data:
+                return pd.Series(dtype=float), {"ok": False, "reason": "no observations", "last_date": None, "count": 0}
+            obs = pd.DataFrame(data)
+            if "period" not in obs.columns or "value" not in obs.columns:
+                return pd.Series(dtype=float), {"ok": False, "reason": "unexpected EIA schema", "last_date": None, "count": 0}
+            obs["date"] = pd.to_datetime(obs["period"], errors="coerce")
+            obs["value"] = pd.to_numeric(obs["value"], errors="coerce")
+            obs = obs.dropna(subset=["date", "value"]).sort_values("date")
+            series = obs.set_index("date")["value"]
+            last_date = series.index[-1].date().isoformat() if not series.empty else None
+            return series, {"ok": not series.empty, "reason": "ok" if not series.empty else "empty", "last_date": last_date, "count": int(series.shape[0])}
+        except Exception as exc:
+            return pd.Series(dtype=float), {"ok": False, "reason": str(exc)[:180], "last_date": None, "count": 0}
+
+    @staticmethod
+    def _merge_fallback_column(frame: pd.DataFrame, column: str, fallback: pd.Series, fallback_name: str, sources: Dict[str, str]) -> None:
+        if fallback is None or fallback.empty:
+            return
+        existing_ok = column in frame.columns and frame[column].notna().sum() > 0
+        if existing_ok:
+            return
+        aligned = pd.to_numeric(fallback, errors="coerce").sort_index().reindex(frame.index).ffill()
+        if aligned.notna().sum() == 0:
+            return
+        frame[column] = aligned
+        sources[column] = fallback_name
 
     @staticmethod
     def _freshness(last_date, max_age_days: int) -> bool:
@@ -162,9 +210,11 @@ class UltimateSentinelEngine:
             "crypto": float(weights.get("crypto", 0.0)),
         }
 
-    def _data_health(self, fred_meta: Dict[str, Dict[str, object]], y_data: pd.DataFrame, today_index) -> Dict[str, object]:
+    def _data_health(self, fred_meta: Dict[str, Dict[str, object]], y_data: pd.DataFrame, today_index, source_map: Optional[Dict[str, str]] = None) -> Dict[str, object]:
+        source_map = source_map or {}
         core_yahoo = ["ES=F", "CL=F", "GC=F", "^VIX"]
         secondary_yahoo = ["HG=F", "SI=F", "USDJPY=X", "EURUSD=X", "SOXX", "BTC-USD", "BDRY", "^VIX3M"]
+        energy_complements = ["BZ=F", "HO=F", "RB=F", "NG=F"]
         core_fred = ["spread", "tips", "vix", "dxy", "dgs2", "dgs10", "t10yie"]
 
         issues = []
@@ -185,6 +235,14 @@ class UltimateSentinelEngine:
             ok = ticker in y_data.columns and y_data[ticker].notna().sum() >= 30 and pd.notna(y_data[ticker].iloc[-1])
             if not ok:
                 warnings.append(f"missing secondary market series: {ticker}")
+
+        energy_ok = sum(1 for ticker in energy_complements if ticker in y_data.columns and y_data[ticker].notna().sum() >= 30 and pd.notna(y_data[ticker].iloc[-1]))
+        if energy_ok == 0:
+            warnings.append("no secondary energy-complex series available; structural oil score uses WTI/Brent only")
+        elif energy_ok < 2:
+            warnings.append(f"limited energy-complex coverage: {energy_ok}/{len(energy_complements)} secondary series")
+
+        source_notes = [f"{k}={v}" for k, v in sorted(source_map.items())]
 
         for key in core_fred:
             meta = fred_meta.get(key, {})
@@ -208,12 +266,18 @@ class UltimateSentinelEngine:
             "core_market_required": len(core_yahoo),
             "issues": issues,
             "warnings": warnings,
+            "source_notes": source_notes,
         }
 
     def _build_macro_frame(self, y_data: pd.DataFrame, raw: Dict[str, pd.Series]) -> pd.DataFrame:
         index = y_data.index
         p = pd.DataFrame(index=index)
         p["oil"] = y_data["CL=F"]
+        p["brent"] = y_data.get("BZ=F", pd.Series(index=index, dtype=float))
+        p["heating_oil"] = y_data.get("HO=F", pd.Series(index=index, dtype=float))
+        p["gasoline"] = y_data.get("RB=F", pd.Series(index=index, dtype=float))
+        p["natgas"] = y_data.get("NG=F", pd.Series(index=index, dtype=float))
+        p["crude_stocks"] = self._safe_reindex(raw.get("eia_crude_stocks", pd.Series(dtype=float)), index)
         p["freight"] = y_data.get("BDRY", pd.Series(index=index, dtype=float))
         p["hy_oas"] = self._safe_reindex(raw["spread"], index)
         p["ig_oas"] = self._safe_reindex(raw["ig_spread"], index)
@@ -253,22 +317,29 @@ class UltimateSentinelEngine:
             "ig_spread": "BAMLC0A0CM",
             "dgs2": "DGS2",
             "dgs10": "DGS10",
+            "vix3m": "VXVCLS",
+            "wti_spot": "DCOILWTICO",
+            "brent_spot": "DCOILBRENTEU",
         }
         raw = {}
         fred_meta = {}
         for key, sid in fred_ids.items():
             raw[key], fred_meta[key] = self.fetch_fred(sid)
 
+        eia_crude_stocks, eia_meta = self.fetch_eia_series("WCESTUS1", length=260)
+        raw["eia_crude_stocks"] = eia_crude_stocks
+        fred_meta["eia_crude_stocks"] = eia_meta
+
         tickers = [
             "HG=F", "SI=F", "GC=F", "ES=F", "EURUSD=X", "USDJPY=X", "JPYUSD=X",
-            "^VIX", "^VIX3M", "SOXX", "CL=F", "TLT", "BTC-USD", "BDRY"
+            "^VIX", "^VIX3M", "SOXX", "CL=F", "BZ=F", "HO=F", "RB=F", "NG=F", "TLT", "BTC-USD", "BDRY"
         ]
         y_data = pd.DataFrame()
         yahoo_error = ""
         try:
             downloaded = yf.download(
                 tickers=tickers,
-                period="2y",
+                period="5y",
                 interval="1d",
                 auto_adjust=False,
                 progress=False,
@@ -279,12 +350,24 @@ class UltimateSentinelEngine:
         except Exception as exc:
             yahoo_error = str(exc)[:180]
 
+        source_map: Dict[str, str] = {}
+
+        # FRED/CBOE fallbacks: ^VIX3M, WTI spot and Brent spot. FRED identifies
+        # VXVCLS as the CBOE 3-month volatility index and the crude series as EIA
+        # sourced spot prices, so these are suitable independent fallbacks.
+        if not y_data.empty:
+            self._merge_fallback_column(y_data, "^VIX3M", raw.get("vix3m"), "FRED:CBOE_VXVCLS", source_map)
+            self._merge_fallback_column(y_data, "CL=F", raw.get("wti_spot"), "FRED:EIA_WTI_SPOT", source_map)
+            self._merge_fallback_column(y_data, "BZ=F", raw.get("brent_spot"), "FRED:EIA_BRENT_SPOT", source_map)
+
         if y_data.empty:
-            health = {"status": "HALT", "issues": [f"Yahoo unavailable: {yahoo_error or 'empty response'}"], "warnings": [], "core_market_available": 0, "core_market_required": 4}
+            health = {"status": "HALT", "issues": [f"Yahoo unavailable: {yahoo_error or 'empty response'}"], "warnings": [], "core_market_available": 0, "core_market_required": 4, "source_notes": []}
         else:
-            health = self._data_health(fred_meta, y_data, now)
+            health = self._data_health(fred_meta, y_data, now, source_map=source_map)
             if yahoo_error:
                 health["warnings"].append(f"Yahoo warning: {yahoo_error}")
+            if eia_crude_stocks.empty and EIA_API_KEY:
+                health["warnings"].append(f"EIA inventory unavailable: {eia_meta.get('reason', 'unknown')}")
 
         prev = self._valid_previous_allocation(history)
 
@@ -445,7 +528,20 @@ class UltimateSentinelEngine:
                 "oil_ret_5d_z": round(float(latest.get("oil_ret_5d_z", 0.0)), 2),
                 "oil_ret_20d_z": round(float(latest.get("oil_ret_20d_z", 0.0)), 2),
                 "oil_abs_5d_percentile": round(float(latest.get("oil_abs_5d_percentile", 50.0)), 1),
+                "oil_level_percentile_252": round(float(latest.get("oil_level_percentile_252", 0.0)), 1),
+                "oil_level_percentile_756": round(float(latest.get("oil_level_percentile_756", 0.0)), 1),
+                "oil_level_z_252": round(float(latest.get("oil_level_z_252", 0.0)), 2),
+                "oil_level_z_756": round(float(latest.get("oil_level_z_756", 0.0)), 2),
+                "oil_high_level_persistence_60d": round(float(latest.get("oil_high_level_persistence_60d", 0.0)), 3),
+                "brent_level_percentile_252": round(float(latest.get("brent_level_percentile_252", 0.0)), 1),
+                "brent_wti_spread": round(float(latest.get("brent_wti_spread", 0.0)), 2),
+                "brent_wti_spread_percentile_252": round(float(latest.get("brent_wti_spread_percentile_252", 0.0)), 1),
+                "energy_breadth_20d": round(float(latest.get("energy_breadth_20d", 0.0)), 3),
+                "crude_inventory_draw_z": round(float(latest.get("crude_inventory_draw_z", 0.0)), 2),
                 "oil_event_score": round(float(weights_live.get("oil_event_score", 0.0)), 3),
+                "oil_momentum_score": round(float(weights_live.get("oil_momentum_score", 0.0)), 3),
+                "oil_structural_score": round(float(weights_live.get("oil_structural_score", 0.0)), 3),
+                "oil_event_type": str(weights_live.get("oil_event_type", "NONE")),
                 "commodity_event_active": bool(weights_live.get("commodity_event_active", False)),
                 "commodity_event_reason": str(weights_live.get("commodity_event_reason", "")),
                 "unknown_event_score": round(float(weights_live.get("unknown_event_score", 0.0)), 3),
@@ -476,6 +572,11 @@ class UltimateSentinelEngine:
                 "data_health_status": str(health["status"]),
                 "data_health_issues": " | ".join(health["issues"]),
                 "data_health_warnings": " | ".join(health["warnings"]),
+                "data_source_notes": " | ".join(health.get("source_notes", [])),
+                "oil_price_source": source_map.get("CL=F", "Yahoo:CL=F"),
+                "brent_price_source": source_map.get("BZ=F", "Yahoo:BZ=F"),
+                "vix3m_source": source_map.get("^VIX3M", "Yahoo:^VIX3M"),
+                "eia_inventory_source": "EIA_API:WCESTUS1" if not eia_crude_stocks.empty else "unavailable",
             },
         )
 
@@ -503,7 +604,20 @@ class UltimateSentinelEngine:
             "oil_ret_5d_z": 0.0,
             "oil_ret_20d_z": 0.0,
             "oil_abs_5d_percentile": 0.0,
+            "oil_level_percentile_252": 0.0,
+            "oil_level_percentile_756": 0.0,
+            "oil_level_z_252": 0.0,
+            "oil_level_z_756": 0.0,
+            "oil_high_level_persistence_60d": 0.0,
+            "brent_level_percentile_252": 0.0,
+            "brent_wti_spread": 0.0,
+            "brent_wti_spread_percentile_252": 0.0,
+            "energy_breadth_20d": 0.0,
+            "crude_inventory_draw_z": 0.0,
             "oil_event_score": float(weights.get("oil_event_score", 0.0)),
+            "oil_momentum_score": float(weights.get("oil_momentum_score", 0.0)),
+            "oil_structural_score": float(weights.get("oil_structural_score", 0.0)),
+            "oil_event_type": str(weights.get("oil_event_type", "NONE")),
             "commodity_event_active": bool(weights.get("commodity_event_active", False)),
             "commodity_event_reason": str(weights.get("commodity_event_reason", "")),
             "unknown_event_score": float(weights.get("unknown_event_score", 0.0)),
@@ -532,6 +646,11 @@ class UltimateSentinelEngine:
             "data_health_status": str(health.get("status", "HALT")),
             "data_health_issues": " | ".join(health.get("issues", [])),
             "data_health_warnings": " | ".join(health.get("warnings", [])),
+            "data_source_notes": " | ".join(health.get("source_notes", [])),
+            "oil_price_source": "unavailable",
+            "brent_price_source": "unavailable",
+            "vix3m_source": "unavailable",
+            "eia_inventory_source": "unavailable",
             "cash_weight": round(w["cash"], 4),
             "gold_weight": round(w["gold"], 4),
             "bond_weight": round(w["bond"], 4),
