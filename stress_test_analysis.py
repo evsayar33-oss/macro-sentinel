@@ -70,18 +70,15 @@ def run_monte_carlo_stress_test(df_classified: pd.DataFrame, n_simulations: int 
             path_returns = np.array(path_returns[:horizon_days])
             actual_len = len(path_returns)
             
-            # Inject random severe tail shocks (1% probability of an extreme liquidity shock)
+            # Inject identical exogenous tail shocks across strategies. The old
+            # version hard-coded an almost-zero tail loss for Macro Sentinel, which
+            # effectively assumed the answer and overstated the engine's protection.
             shock_mask = np.random.rand(actual_len) < 0.015
             if np.any(shock_mask):
-                if "Macro Sentinel" in strat_name:
-                    # System detects and holds cash -> negligible tail risk
-                    path_returns[shock_mask] += np.random.normal(0.0001, 0.002, size=np.sum(shock_mask))
-                elif "Defensive" in strat_name:
-                    path_returns[shock_mask] -= np.random.uniform(0.01, 0.03, size=np.sum(shock_mask))
-                elif "Artemis" in strat_name:
-                    path_returns[shock_mask] -= np.random.uniform(0.015, 0.045, size=np.sum(shock_mask))
-                else:
-                    path_returns[shock_mask] -= np.random.uniform(0.03, 0.08, size=np.sum(shock_mask))
+                n_tail = int(np.sum(shock_mask))
+                tail = np.abs(np.random.standard_t(df=4, size=n_tail))
+                tail = np.clip(0.01 + 0.012 * tail, 0.01, 0.08)
+                path_returns[shock_mask] -= tail
 
             equity_curve = np.cumprod(1.0 + path_returns)
             simulated_finals[sim] = (equity_curve[-1] - 1.0) * 100.0
