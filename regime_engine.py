@@ -26,6 +26,7 @@ class MacroRegimeEngine:
         principles = self.config.get("system_architecture", {}).get("principles", {})
         self.hysteresis_weeks = int(principles.get("hysteresis_confirmation_period_weeks", 2))
         self.hysteresis_days = max(1, self.hysteresis_weeks * 5)
+        self.switch_confirmation_observations = max(1, int(principles.get("switch_confirmation_observations", 2)))
         self.minimum_history = int(principles.get("minimum_history_days", 126))
 
     def load_config(self) -> Dict[str, Any]:
@@ -340,8 +341,12 @@ class MacroRegimeEngine:
             "r5_vix_pct": 30.0,
             "r5_ndl_z": 0.0,
         }
+        # The config file is the single source of truth for calibrated thresholds.
+        configured = self.config.get("calibrated_thresholds", {})
+        if isinstance(configured, dict):
+            th.update({k: float(v) for k, v in configured.items() if k in th})
         if custom_thresholds:
-            th.update(custom_thresholds)
+            th.update({k: float(v) for k, v in custom_thresholds.items() if k in th})
 
         oil_z = self._safe_float(row.get("oil_ret_20d_z"))
         oil_trend = self._safe_float(row.get("oil_trend_strength", row.get("oil_trend", 0.0)))
@@ -373,8 +378,13 @@ class MacroRegimeEngine:
 
         semantics = self.config.get("regime_semantics", {})
         high_real_floor = float(semantics.get("r3_high_real_rate_floor", 2.0))
+        high_real_pct_floor = float(semantics.get("r3_high_real_rate_percentile_floor", 75.0))
         r3_daily_shock = tips_chg_z > th["r3_tips_z"]
-        r3_persistent = tips_lvl >= high_real_floor or tips_level_z > th.get("r3_tips_level_z", 1.0)
+        r3_persistent = (
+            tips_lvl >= high_real_floor
+            or tips_level_z > th.get("r3_tips_level_z", 1.0)
+            or tips_level_pct >= high_real_pct_floor
+        )
         r3_t2 = t10yie_z < th["r3_t10yie_z"]
         r3_active = bool((r3_daily_shock or r3_persistent) and r3_t2)
 
@@ -541,7 +551,6 @@ class MacroRegimeEngine:
 
     def run_time_series(self, prepared_df: pd.DataFrame, custom_thresholds: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         out = prepared_df.copy().sort_index()
-        n = len(out)
         defaults = {
             "raw_candidate_id": 0,
             "raw_candidate_name": "REJIMSIZ_GECIS",
@@ -550,6 +559,8 @@ class MacroRegimeEngine:
             "regime_type": "TRANSITION",
             "regime_subtype": "Dengeli / Nötr Piyasa",
             "regime_severity_source": "NONE",
+            "pending_regime_id": 0,
+            "pending_regime_count": 0,
             "hysteresis_days_left": 0,
             "conflict_note": "",
             "regime_cash_weight": 35.0,
@@ -558,9 +569,12 @@ class MacroRegimeEngine:
             "regime_eq_weight": 15.0,
             "regime_commodity_weight": 5.0,
             "regime_crypto_weight": 5.0,
+            "oil_pressure_score": 0.0,
             "oil_event_score": 0.0,
             "oil_momentum_score": 0.0,
             "oil_structural_score": 0.0,
+            "oil_structural_qualified": False,
+            "oil_momentum_confirmed": False,
             "oil_event_type": "NONE",
             "oil_event_active": False,
             "commodity_event_active": False,
@@ -577,35 +591,71 @@ class MacroRegimeEngine:
         current_type = "TRANSITION"
         current_subtype = "Dengeli / Nötr Piyasa"
         current_severity_source = "NONE"
+        pending_id = 0
+        pending_count = 0
         hysteresis = 0
 
-        for i in range(n):
+        for i in range(len(out)):
             row = out.iloc[i]
             evals = self.evaluate_regimes_for_row(row, custom_thresholds=custom_thresholds)
             decision = self.resolve_conflicts(evals, row)
             candidate_id = int(decision["candidate_id"])
+            candidate_hard = bool(
+                candidate_id in (1, 2, 4)
+                or (candidate_id == 3 and decision.get("severity_source") == "DAILY_SHOCK")
+            )
+            hard_unknown = self._hard_event_override(row)
 
             out.at[out.index[i], "raw_candidate_id"] = candidate_id
             out.at[out.index[i], "raw_candidate_name"] = decision["candidate_name"]
             out.at[out.index[i], "conflict_note"] = decision["conflict_note"]
 
-            hard_shock = self._hard_event_override(row)
-            if candidate_id != 0:
+            if candidate_hard:
                 current_id = candidate_id
                 current_name = decision["candidate_name"]
                 current_type = decision["candidate_type"]
                 current_subtype = decision["candidate_subtype"]
+                current_severity_source = decision.get("severity_source", "NONE")
+                pending_id = 0
+                pending_count = 0
                 hysteresis = self.hysteresis_days
-            elif hard_shock:
-                # A very extreme sensor is allowed to clear a stale regime state;
-                # it does not invent a named regime.
+            elif candidate_id == current_id and candidate_id != 0:
+                current_name = decision["candidate_name"]
+                current_type = decision["candidate_type"]
+                current_subtype = decision["candidate_subtype"]
+                current_severity_source = decision.get("severity_source", current_severity_source)
+                pending_id = 0
+                pending_count = 0
+                hysteresis = self.hysteresis_days
+            elif candidate_id != 0:
+                if candidate_id == pending_id:
+                    pending_count += 1
+                else:
+                    pending_id = candidate_id
+                    pending_count = 1
+                if pending_count >= self.switch_confirmation_observations:
+                    current_id = candidate_id
+                    current_name = decision["candidate_name"]
+                    current_type = decision["candidate_type"]
+                    current_subtype = decision["candidate_subtype"]
+                    current_severity_source = decision.get("severity_source", "NONE")
+                    pending_id = 0
+                    pending_count = 0
+                    hysteresis = self.hysteresis_days
+                elif current_id != 0:
+                    hysteresis = max(hysteresis - 1, 0)
+            elif hard_unknown:
                 current_id = 0
                 current_name = "REJIMSIZ_GECIS"
                 current_type = "TRANSITION"
                 current_subtype = "Extreme Unclassified Event"
                 current_severity_source = "UNKNOWN_EVENT"
+                pending_id = 0
+                pending_count = 0
                 hysteresis = 0
-            elif hysteresis > 0:
+            elif current_id != 0 and hysteresis > 0:
+                pending_id = 0
+                pending_count = 0
                 hysteresis -= 1
             else:
                 current_id = 0
@@ -613,13 +663,19 @@ class MacroRegimeEngine:
                 current_type = "TRANSITION"
                 current_subtype = "Dengeli / Nötr Piyasa"
                 current_severity_source = "NONE"
+                pending_id = 0
+                pending_count = 0
+                hysteresis = 0
 
-            out.at[out.index[i], "confirmed_regime_id"] = current_id
-            out.at[out.index[i], "confirmed_regime_name"] = current_name
-            out.at[out.index[i], "regime_type"] = current_type
-            out.at[out.index[i], "regime_subtype"] = current_subtype
-            out.at[out.index[i], "regime_severity_source"] = current_severity_source
-            out.at[out.index[i], "hysteresis_days_left"] = hysteresis
+            idx = out.index[i]
+            out.at[idx, "confirmed_regime_id"] = current_id
+            out.at[idx, "confirmed_regime_name"] = current_name
+            out.at[idx, "regime_type"] = current_type
+            out.at[idx, "regime_subtype"] = current_subtype
+            out.at[idx, "regime_severity_source"] = current_severity_source
+            out.at[idx, "pending_regime_id"] = pending_id
+            out.at[idx, "pending_regime_count"] = pending_count
+            out.at[idx, "hysteresis_days_left"] = hysteresis
 
             weights = self.get_portfolio_weights(current_id, current_subtype, row=row)
             for source, target in (
@@ -630,16 +686,14 @@ class MacroRegimeEngine:
                 ("commodity", "regime_commodity_weight"),
                 ("crypto", "regime_crypto_weight"),
             ):
-                out.at[out.index[i], target] = float(weights[source])
-            out.at[out.index[i], "oil_event_score"] = float(weights.get("oil_event_score", 0.0))
-            out.at[out.index[i], "oil_momentum_score"] = float(weights.get("oil_momentum_score", 0.0))
-            out.at[out.index[i], "oil_structural_score"] = float(weights.get("oil_structural_score", 0.0))
-            out.at[out.index[i], "oil_event_type"] = str(weights.get("oil_event_type", "NONE"))
-            out.at[out.index[i], "commodity_event_active"] = bool(weights.get("commodity_event_active", False))
-            out.at[out.index[i], "commodity_event_reason"] = str(weights.get("commodity_event_reason", ""))
-            out.at[out.index[i], "unknown_event_score"] = float(weights.get("unknown_event_score", 0.0))
-            out.at[out.index[i], "unknown_event_active"] = bool(weights.get("unknown_event_active", False))
-            out.at[out.index[i], "unknown_guard_active"] = bool(weights.get("unknown_guard_active", False))
+                out.at[idx, target] = float(weights[source])
+            for key in (
+                "oil_pressure_score", "oil_event_score", "oil_momentum_score", "oil_structural_score",
+                "oil_structural_qualified", "oil_momentum_confirmed", "oil_event_type", "oil_event_active",
+                "commodity_event_active", "commodity_event_reason", "unknown_event_score",
+                "unknown_event_active", "unknown_guard_active",
+            ):
+                out.at[idx, key] = weights.get(key, defaults[key])
 
         return out
 
@@ -679,30 +733,26 @@ class MacroRegimeEngine:
         base_z = float(cfg.get("activation_z", 0.75))
         saturation_z = max(base_z + 0.1, float(cfg.get("saturation_z", 3.5)))
         percentile_gate = float(cfg.get("adaptive_percentile_gate", 80.0))
-
         shock_z = max(
             self._safe_float(row.get("oil_ret_5d_z")),
             self._safe_float(row.get("oil_ret_20d_z")),
             self._safe_float(row.get("oil_trend_strength", row.get("oil_trend", 0.0))),
         )
-        move_pct = self._safe_float(row.get("oil_abs_5d_percentile"), 0.0)
-
-        if shock_z <= base_z and move_pct < percentile_gate:
+        move_pct = self._safe_float(row.get("oil_abs_5d_percentile"), np.nan)
+        if not np.isfinite(shock_z) or (shock_z <= base_z and (not np.isfinite(move_pct) or move_pct < percentile_gate)):
             return 0.0
-
         intensity = np.clip((max(shock_z, base_z) - base_z) / (saturation_z - base_z), 0.0, 1.0)
-        percentile_boost = 0.10 if move_pct >= percentile_gate else 0.0
-        breadth = self._safe_float(row.get("commodity_breadth_20d"), 0.0)
-        breadth_boost = 0.10 if breadth >= 0.50 else 0.0
+        percentile_boost = 0.10 if np.isfinite(move_pct) and move_pct >= percentile_gate else 0.0
+        breadth = self._safe_float(row.get("commodity_breadth_20d"), np.nan)
+        breadth_boost = 0.10 if np.isfinite(breadth) and breadth >= 0.50 else 0.0
         quality = float(np.clip(self._safe_float(row.get("oil_event_quality_60d"), 0.5), 0.5, 1.0))
         score = float(np.clip(intensity + percentile_boost + breadth_boost, 0.0, 1.0))
         return float(np.clip(score * (0.80 + 0.20 * quality), 0.0, 1.0))
 
-    def _oil_structural_score(self, row: pd.Series) -> float:
+    def _oil_structural_score(self, row: pd.Series) -> Dict[str, Any]:
         cfg = self.config.get("event_overlay", {}).get("oil", {}).get("structural", {})
         if not bool(cfg.get("enabled", True)):
-            return 0.0
-
+            return {"score": 0.0, "qualified": False, "qualification_reason": "Structural oil layer disabled."}
         level_pct = self._safe_float(row.get("oil_level_percentile_756"), np.nan)
         if not np.isfinite(level_pct):
             level_pct = self._safe_float(row.get("oil_level_percentile_252"), np.nan)
@@ -711,139 +761,118 @@ class MacroRegimeEngine:
         inventory_draw = self._safe_float(row.get("crude_inventory_draw_z"), np.nan)
         spread_pct = self._safe_float(row.get("brent_wti_spread_percentile_252"), np.nan)
         brent_pct = self._safe_float(row.get("brent_level_percentile_252"), np.nan)
-
-        components = []
-        weights = []
-
+        components, weights = [], []
         if np.isfinite(level_pct):
-            soft = float(cfg.get("level_soft_percentile", 80.0))
-            hard = max(soft + 1.0, float(cfg.get("level_hard_percentile", 95.0)))
-            level_score = np.clip((level_pct - soft) / (hard - soft), 0.0, 1.0)
-            components.append(float(level_score)); weights.append(float(cfg.get("level_weight", 0.35)))
-
+            soft = float(cfg.get("level_soft_percentile", 80.0)); hard = max(soft + 1.0, float(cfg.get("level_hard_percentile", 95.0)))
+            components.append(float(np.clip((level_pct - soft) / (hard - soft), 0.0, 1.0))); weights.append(float(cfg.get("level_weight", 0.35)))
         if np.isfinite(brent_pct):
-            soft = float(cfg.get("brent_soft_percentile", 80.0))
-            hard = max(soft + 1.0, float(cfg.get("brent_hard_percentile", 95.0)))
-            brent_score = np.clip((brent_pct - soft) / (hard - soft), 0.0, 1.0)
-            components.append(float(brent_score)); weights.append(float(cfg.get("brent_weight", 0.15)))
-
+            soft = float(cfg.get("brent_soft_percentile", 80.0)); hard = max(soft + 1.0, float(cfg.get("brent_hard_percentile", 95.0)))
+            components.append(float(np.clip((brent_pct - soft) / (hard - soft), 0.0, 1.0))); weights.append(float(cfg.get("brent_weight", 0.15)))
         if np.isfinite(persistence):
             gate = float(cfg.get("persistence_gate", 0.40))
-            persistence_score = np.clip((persistence - gate) / max(1.0 - gate, 1e-6), 0.0, 1.0)
-            components.append(float(persistence_score)); weights.append(float(cfg.get("persistence_weight", 0.25)))
-
+            components.append(float(np.clip((persistence - gate) / max(1.0 - gate, 1e-6), 0.0, 1.0))); weights.append(float(cfg.get("persistence_weight", 0.25)))
         if np.isfinite(breadth):
             gate = float(cfg.get("breadth_gate", 0.60))
-            breadth_score = np.clip((breadth - gate) / max(1.0 - gate, 1e-6), 0.0, 1.0)
-            components.append(float(breadth_score)); weights.append(float(cfg.get("breadth_weight", 0.10)))
-
+            components.append(float(np.clip((breadth - gate) / max(1.0 - gate, 1e-6), 0.0, 1.0))); weights.append(float(cfg.get("breadth_weight", 0.10)))
         if np.isfinite(inventory_draw):
-            inventory_score = np.clip(inventory_draw / 2.0, 0.0, 1.0)
-            components.append(float(inventory_score)); weights.append(float(cfg.get("inventory_weight", 0.10)))
-
+            components.append(float(np.clip(inventory_draw / 2.0, 0.0, 1.0))); weights.append(float(cfg.get("inventory_weight", 0.10)))
         if np.isfinite(spread_pct):
-            spread_score = np.clip((spread_pct - float(cfg.get("spread_soft_percentile", 70.0))) / 25.0, 0.0, 1.0)
-            components.append(float(spread_score)); weights.append(float(cfg.get("spread_weight", 0.05)))
-
-        if not components:
-            return 0.0
-
+            soft = float(cfg.get("spread_soft_percentile", 70.0))
+            components.append(float(np.clip((spread_pct - soft) / max(100.0 - soft, 1.0), 0.0, 1.0))); weights.append(float(cfg.get("spread_weight", 0.05)))
+        if not components or sum(weights) <= 0:
+            return {"score": 0.0, "qualified": False, "qualification_reason": "Insufficient structural data."}
         score = float(np.average(components, weights=weights))
-
-        # Qualification rule: persistent high price is sufficient only when the
-        # market is also broad / supply-stressed; this prevents a permanently
-        # expensive but orderly oil market from becoming a "shock" every day.
         high_level = np.isfinite(level_pct) and level_pct >= float(cfg.get("qualification_level_percentile", 85.0))
         persistent = np.isfinite(persistence) and persistence >= float(cfg.get("qualification_persistence", 0.40))
-        broad = np.isfinite(breadth) and breadth >= float(cfg.get("qualification_breadth", 0.60))
         inventory_stress = np.isfinite(inventory_draw) and inventory_draw >= float(cfg.get("qualification_inventory_draw_z", 1.0))
         spread_stress = np.isfinite(spread_pct) and spread_pct >= float(cfg.get("qualification_spread_percentile", 85.0))
-
-        qualified = (
-            (high_level and persistent)
-            or (high_level and (inventory_stress or spread_stress))
-            or (level_pct >= 90.0 and inventory_stress)
-        )
-        return float(score if qualified else score * float(cfg.get("unqualified_multiplier", 0.35)))
+        qualified = bool((high_level and persistent) or (high_level and (inventory_stress or spread_stress)) or (np.isfinite(level_pct) and level_pct >= 90.0 and inventory_stress))
+        if qualified:
+            reason = "Structural qualification confirmed by high price level plus persistence/supply stress."
+        elif np.isfinite(level_pct) and level_pct >= float(cfg.get("pressure_level_percentile", 75.0)):
+            reason = "Structural pressure present, but confirmed-event qualification is not met."
+        else:
+            reason = "Structural pressure below the confirmed-event qualification zone."
+        return {"score": score, "qualified": qualified, "qualification_reason": reason}
 
     def _oil_event_snapshot(self, row: pd.Series) -> Dict[str, Any]:
+        cfg = self.config.get("event_overlay", {}).get("oil", {})
         momentum = self._oil_momentum_score(row)
-        structural = self._oil_structural_score(row)
-        combined = max(momentum, structural)
-        if combined <= 0.0:
-            event_type = "NONE"
-        elif momentum >= 0.20 and structural >= 0.20:
-            event_type = "COMBINED"
-        elif structural > momentum:
-            event_type = "STRUCTURAL"
+        structural_info = self._oil_structural_score(row)
+        structural = float(structural_info["score"])
+        structural_qualified = bool(structural_info["qualified"])
+        momentum_activation = float(cfg.get("momentum_activation_score", cfg.get("activation_score", 0.20)))
+        structural_activation = float(cfg.get("structural_activation_score", cfg.get("activation_score", 0.20)))
+        momentum_confirmed = momentum >= momentum_activation
+        structural_confirmed = structural_qualified and structural >= structural_activation
+        if momentum_confirmed and structural_confirmed:
+            event_type = "COMBINED"; event_score = max(momentum, structural)
+        elif momentum_confirmed:
+            event_type = "MOMENTUM"; event_score = momentum
+        elif structural_confirmed:
+            event_type = "STRUCTURAL"; event_score = structural
         else:
-            event_type = "MOMENTUM"
+            event_type = "PRESSURE_ONLY" if max(momentum, structural) >= float(cfg.get("pressure_display_threshold", 0.20)) else "NONE"
+            event_score = 0.0
         return {
             "momentum_score": float(momentum),
             "structural_score": float(structural),
-            "score": float(combined),
+            "structural_qualified": structural_qualified,
+            "momentum_confirmed": bool(momentum_confirmed),
+            "structural_confirmed": bool(structural_confirmed),
+            "pressure_score": float(max(momentum, structural)),
+            "event_score": float(event_score),
             "event_type": event_type,
+            "event_active": bool(momentum_confirmed or structural_confirmed),
+            "qualification_reason": structural_info["qualification_reason"],
         }
 
     def _oil_event_score(self, row: pd.Series) -> float:
         if not bool(self.config.get("event_overlay", {}).get("oil", {}).get("enabled", True)):
             return 0.0
-        return self._oil_event_snapshot(row)["score"]
+        return self._oil_event_snapshot(row)["event_score"]
 
     def _apply_event_overlays(self, base_weights: Dict[str, float], row: pd.Series, regime_id: int) -> Dict[str, Any]:
         w = self._normalize_weights(base_weights)
         oil_snapshot = self._oil_event_snapshot(row)
-        oil_score = oil_snapshot["score"]
+        oil_score = oil_snapshot["event_score"]
+        oil_pressure = oil_snapshot["pressure_score"]
         unknown_score = self._unknown_event_score(row)
         overlay_cfg = self.config.get("event_overlay", {})
         oil_cfg = overlay_cfg.get("oil", {})
         unknown_cfg = overlay_cfg.get("unknown_event", {})
-
-        w["oil_event_score"] = oil_score
-        w["oil_momentum_score"] = oil_snapshot["momentum_score"]
-        w["oil_structural_score"] = oil_snapshot["structural_score"]
-        w["oil_event_type"] = oil_snapshot["event_type"]
-        w["oil_event_active"] = oil_score >= float(oil_cfg.get("activation_score", 0.20))
-        w["commodity_event_active"] = False
-        w["commodity_event_reason"] = "No commodity event overlay active."
         unknown_activation = float(unknown_cfg.get("activation_score", 0.25))
-        w["unknown_event_score"] = unknown_score
-        w["unknown_event_active"] = unknown_score >= unknown_activation
-        w["unknown_guard_active"] = unknown_score >= unknown_activation
-
-        # Systemic liquidity shock is an explicit hard risk-off state.
+        w.update({
+            "oil_pressure_score": oil_pressure,
+            "oil_event_score": oil_score,
+            "oil_momentum_score": oil_snapshot["momentum_score"],
+            "oil_structural_score": oil_snapshot["structural_score"],
+            "oil_structural_qualified": oil_snapshot["structural_qualified"],
+            "oil_momentum_confirmed": oil_snapshot["momentum_confirmed"],
+            "oil_event_type": oil_snapshot["event_type"],
+            "oil_event_active": oil_snapshot["event_active"],
+            "commodity_event_active": False,
+            "commodity_event_reason": "No confirmed commodity event overlay active.",
+            "unknown_event_score": unknown_score,
+            "unknown_event_active": unknown_score >= unknown_activation,
+            "unknown_guard_active": unknown_score >= unknown_activation,
+        })
         if regime_id == 2:
             w["commodity_event_reason"] = "Systemic liquidity shock: commodity overlay disabled."
-            w = self._normalize_weights(w)
-            w.update(oil_event_score=oil_score, oil_momentum_score=oil_snapshot["momentum_score"], oil_structural_score=oil_snapshot["structural_score"], oil_event_type=oil_snapshot["event_type"], oil_event_active=oil_score >= float(oil_cfg.get("activation_score", 0.20)), commodity_event_active=False, unknown_event_score=unknown_score, unknown_event_active=unknown_score >= unknown_activation, unknown_guard_active=unknown_score >= unknown_activation)
-            return w
-
-        # Unknown severe anomaly: do not invent direction; reduce exposure and
-        # preserve a meaningful cash buffer. This is a safety circuit, not a regime.
-        if unknown_score > float(unknown_cfg.get("activation_score", 0.25)) and regime_id == 0:
+            return self._normalize_weights(w)
+        unknown_guard_active = regime_id == 0 and unknown_score >= unknown_activation
+        if unknown_guard_active:
             target_cash = float(unknown_cfg.get("minimum_cash", 50.0))
             if w["cash"] < target_cash:
                 needed = target_cash - w["cash"]
-                take_eq = min(needed, w["equity"])
-                w["equity"] -= take_eq
-                w["cash"] += take_eq
-                needed -= take_eq
+                take_eq = min(needed, w["equity"]); w["equity"] -= take_eq; w["cash"] += take_eq; needed -= take_eq
                 if needed > 0:
-                    take_crp = min(needed, w["crypto"])
-                    w["crypto"] -= take_crp
-                    w["cash"] += take_crp
+                    take_crp = min(needed, w["crypto"]); w["crypto"] -= take_crp; w["cash"] += take_crp
             w = self._normalize_weights(w)
-
         activation_score = float(oil_cfg.get("activation_score", 0.20))
         max_map = oil_cfg.get("max_commodity_by_regime", {"0": 35.0, "1": 45.0, "2": 0.0, "3": 20.0, "4": 15.0, "5": 25.0})
         max_commodity = float(max_map.get(str(regime_id), max_map.get("0", 35.0)))
-
-        unknown_guard_active = (
-            regime_id == 0
-            and unknown_score > float(unknown_cfg.get("activation_score", 0.25))
-        )
-
-        if oil_score >= activation_score and max_commodity > w["commodity"]:
+        if oil_snapshot["event_active"] and oil_score >= activation_score and max_commodity > w["commodity"]:
             target = w["commodity"] + oil_score * (max_commodity - w["commodity"])
             delta = max(0.0, target - w["commodity"])
             eq_floor = float(oil_cfg.get("equity_floor_by_regime", {}).get(str(regime_id), 0.0))
@@ -853,31 +882,16 @@ class MacroRegimeEngine:
                 max_commodity = min(max_commodity, float(unknown_cfg.get("maximum_commodity", 20.0)))
             eq_available = max(0.0, w["equity"] - eq_floor)
             cash_available = max(0.0, w["cash"] - cash_floor)
-
             eq_share = float(np.clip(oil_cfg.get("funding_from_equity", 0.70), 0.0, 1.0))
             from_eq = min(delta * eq_share, eq_available)
             from_cash = min(delta - from_eq, cash_available)
             actual_delta = from_eq + from_cash
-
-            w["equity"] -= from_eq
-            w["cash"] -= from_cash
-            w["commodity"] += actual_delta
+            w["equity"] -= from_eq; w["cash"] -= from_cash; w["commodity"] += actual_delta
             w["commodity_event_active"] = actual_delta > 1e-9
-            w["commodity_event_reason"] = (
-                f"Independent oil event active ({oil_snapshot['event_type']}): score={oil_score:.2f}, "
-                f"commodity allocation={w['commodity']:.2f}%."
-            )
-
-        w = self._normalize_weights(w)
-        w["oil_event_score"] = oil_score
-        w["oil_momentum_score"] = oil_snapshot["momentum_score"]
-        w["oil_structural_score"] = oil_snapshot["structural_score"]
-        w["oil_event_type"] = oil_snapshot["event_type"]
-        w["oil_event_active"] = oil_score >= activation_score
-        w["unknown_event_score"] = unknown_score
-        w["unknown_event_active"] = unknown_score >= unknown_activation
-        w["unknown_guard_active"] = unknown_score >= unknown_activation
-        return w
+            w["commodity_event_reason"] = f"Confirmed oil event active ({oil_snapshot['event_type']}): score={oil_score:.2f}, commodity allocation={w['commodity']:.2f}%."
+        elif oil_snapshot["event_type"] == "PRESSURE_ONLY":
+            w["commodity_event_reason"] = f"Oil structural/momentum pressure monitored (pressure={oil_pressure:.2f}); confirmed-event gate not met."
+        return self._normalize_weights(w)
 
     @staticmethod
     def _normalize_weights(weights: Dict[str, float]) -> Dict[str, Any]:
@@ -917,11 +931,15 @@ class MacroRegimeEngine:
         oil = self._oil_event_snapshot(row)
         unknown_score = self._unknown_event_score(row)
         return {
-            "oil_event_score": oil["score"],
+            "oil_pressure_score": oil["pressure_score"],
+            "oil_event_score": oil["event_score"],
             "oil_momentum_score": oil["momentum_score"],
             "oil_structural_score": oil["structural_score"],
+            "oil_structural_qualified": oil["structural_qualified"],
+            "oil_momentum_confirmed": oil["momentum_confirmed"],
             "oil_event_type": oil["event_type"],
-            "oil_event_active": oil["score"] >= float(self.config.get("event_overlay", {}).get("oil", {}).get("activation_score", 0.20)),
+            "oil_event_active": oil["event_active"],
+            "oil_qualification_reason": oil["qualification_reason"],
             "oil_level_percentile_252": self._safe_float(row.get("oil_level_percentile_252"), np.nan),
             "oil_level_percentile_756": self._safe_float(row.get("oil_level_percentile_756"), np.nan),
             "oil_high_level_persistence_60d": self._safe_float(row.get("oil_high_level_persistence_60d"), np.nan),
@@ -934,3 +952,4 @@ class MacroRegimeEngine:
             "unknown_event_score": unknown_score,
             "unknown_event_active": unknown_score >= float(self.config.get("event_overlay", {}).get("unknown_event", {}).get("activation_score", 0.25)),
         }
+
