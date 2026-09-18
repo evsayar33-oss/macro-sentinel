@@ -802,20 +802,38 @@ class MacroRegimeEngine:
         persistent = np.isfinite(persistence) and persistence >= float(cfg.get("qualification_persistence", 0.40))
         inventory_stress = np.isfinite(inventory_draw) and inventory_draw >= float(cfg.get("qualification_inventory_draw_z", 1.0))
         spread_stress = np.isfinite(spread_pct) and spread_pct >= float(cfg.get("qualification_spread_percentile", 85.0))
-        qualified = bool((high_level and persistent) or (high_level and (inventory_stress or spread_stress)) or (np.isfinite(level_pct) and level_pct >= 90.0 and inventory_stress))
+        qualified = bool(
+            (high_level and persistent)
+            or (high_level and (inventory_stress or spread_stress))
+            or (np.isfinite(level_pct) and level_pct >= 90.0 and inventory_stress)
+        )
+        supply_confirmed = bool(inventory_stress or spread_stress or (np.isfinite(breadth) and breadth >= float(cfg.get("qualification_breadth", 0.60))))
         if qualified:
-            reason = "Structural qualification confirmed by high price level plus persistence/supply stress."
+            reason = "Structural qualification confirmed by high price level plus persistence/supply confirmation."
         elif np.isfinite(level_pct) and level_pct >= float(cfg.get("pressure_level_percentile", 75.0)):
             reason = "Structural pressure present, but confirmed-event qualification is not met."
         else:
             reason = "Structural pressure below the confirmed-event qualification zone."
-        return {"score": score, "qualified": qualified, "qualification_reason": reason}
+        return {
+            "score": score,
+            "qualified": qualified,
+            "high_level": bool(high_level),
+            "persistent": bool(persistent),
+            "inventory_stress": bool(inventory_stress),
+            "spread_stress": bool(spread_stress),
+            "breadth_confirmed": bool(np.isfinite(breadth) and breadth >= float(cfg.get("qualification_breadth", 0.60))),
+            "supply_confirmed": supply_confirmed,
+            "qualification_reason": reason,
+        }
 
     def _oil_event_snapshot(self, row: pd.Series) -> Dict[str, Any]:
         cfg = self.config.get("event_overlay", {}).get("oil", {})
         momentum = self._oil_momentum_score(row)
         structural_info = self._oil_structural_score(row)
         structural = float(structural_info["score"])
+        # Qualification is derived from the raw structural evidence, never from
+        # a previously persisted flag. This prevents stale history values from
+        # contaminating the live event state.
         structural_qualified = bool(structural_info["qualified"])
         momentum_activation = float(cfg.get("momentum_activation_score", cfg.get("activation_score", 0.20)))
         structural_activation = float(cfg.get("structural_activation_score", cfg.get("activation_score", 0.20)))
@@ -841,6 +859,11 @@ class MacroRegimeEngine:
             "event_type": event_type,
             "event_active": bool(momentum_confirmed or structural_confirmed),
             "qualification_reason": structural_info["qualification_reason"],
+            "structural_high_level": bool(structural_info.get("high_level", False)),
+            "structural_persistent": bool(structural_info.get("persistent", False)),
+            "structural_inventory_stress": bool(structural_info.get("inventory_stress", False)),
+            "structural_spread_stress": bool(structural_info.get("spread_stress", False)),
+            "structural_breadth_confirmed": bool(structural_info.get("breadth_confirmed", False)),
         }
 
     def _oil_event_score(self, row: pd.Series) -> float:
@@ -868,6 +891,11 @@ class MacroRegimeEngine:
             "oil_event_type": oil_snapshot["event_type"],
             "oil_event_active": oil_snapshot["event_active"],
             "oil_qualification_reason": oil_snapshot["qualification_reason"],
+            "oil_structural_high_level": bool(oil_snapshot.get("structural_high_level", False)),
+            "oil_structural_persistent": bool(oil_snapshot.get("structural_persistent", False)),
+            "oil_structural_inventory_stress": bool(oil_snapshot.get("structural_inventory_stress", False)),
+            "oil_structural_spread_stress": bool(oil_snapshot.get("structural_spread_stress", False)),
+            "oil_structural_breadth_confirmed": bool(oil_snapshot.get("structural_breadth_confirmed", False)),
             "commodity_event_active": False,
             "commodity_event_reason": "No confirmed commodity event overlay active.",
             "unknown_event_score": unknown_score,
@@ -1027,6 +1055,11 @@ class MacroRegimeEngine:
             "oil_event_type": oil["event_type"],
             "oil_event_active": oil["event_active"],
             "oil_qualification_reason": oil["qualification_reason"],
+            "oil_structural_high_level": bool(oil.get("structural_high_level", False)),
+            "oil_structural_persistent": bool(oil.get("structural_persistent", False)),
+            "oil_structural_inventory_stress": bool(oil.get("structural_inventory_stress", False)),
+            "oil_structural_spread_stress": bool(oil.get("structural_spread_stress", False)),
+            "oil_structural_breadth_confirmed": bool(oil.get("structural_breadth_confirmed", False)),
             "oil_level_percentile_252": self._safe_float(row.get("oil_level_percentile_252"), np.nan),
             "oil_level_percentile_756": self._safe_float(row.get("oil_level_percentile_756"), np.nan),
             "oil_high_level_persistence_60d": self._safe_float(row.get("oil_high_level_persistence_60d"), np.nan),

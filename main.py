@@ -930,35 +930,69 @@ def _daily_audit(history: pd.DataFrame, current_result: Dict[str, object], min_e
 
 
 def _canonicalize_result_event_state(result: Dict[str, object], activation_score: float = 0.20) -> Dict[str, object]:
-    """Build one authoritative oil-event state from numeric evidence.
+    """Build one authoritative oil-event state from persisted numeric evidence.
 
-    Persisted flags/types are treated as advisory only. This prevents a stale
-    ``oil_event_type=STRUCTURAL`` value from surviving when structural
-    qualification is false.
+    Event flags/types are never trusted on their own. Structural qualification is
+    recomputed from the saved percentile/persistence/supply metrics so history
+    cannot contain impossible states such as STRUCTURAL + qualified=False.
     """
     out = dict(result)
 
     def flag(value):
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-    def num(name, default=0.0):
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"true", "yes", "on"}:
+            return True
+        if text in {"false", "no", "off", "nan", "none", ""}:
+            return False
         try:
-            value = float(out.get(name, default) or default)
+            return bool(float(text))
+        except (TypeError, ValueError):
+            return False
+
+    def num(name, default=np.nan):
+        try:
+            value = float(out.get(name, default))
             return value if np.isfinite(value) else float(default)
         except (TypeError, ValueError):
             return float(default)
 
-    threshold = max(0.0, min(1.0, float(activation_score)))
-    momentum = float(np.clip(num("oil_momentum_score"), 0.0, 1.0))
-    structural = float(np.clip(num("oil_structural_score"), 0.0, 1.0))
-    pressure = float(np.clip(max(num("oil_pressure_score", max(momentum, structural)), momentum, structural), 0.0, 1.0))
+    engine = MacroRegimeEngine()
+    oil_cfg = engine.config.get("event_overlay", {}).get("oil", {})
+    structural_cfg = oil_cfg.get("structural", {})
+    threshold = float(activation_score)
 
-    # Recompute confirmation from evidence rather than trusting the serialized
-    # event-type/active flags. A structural event requires both qualification
-    # and minimum structural score; momentum uses its numeric score directly.
-    qualified = flag(out.get("oil_structural_qualified", False))
-    momentum_ok = momentum >= threshold
-    structural_ok = qualified and structural >= threshold
+    momentum = float(np.clip(num("oil_momentum_score", 0.0), 0.0, 1.0))
+    pressure = num("oil_pressure_score", np.nan)
+    structural = float(np.clip(num("oil_structural_score", 0.0), 0.0, 1.0))
+    if not np.isfinite(pressure):
+        pressure = max(momentum, structural)
+    pressure = float(np.clip(max(pressure, momentum, structural), 0.0, 1.0))
+
+    level_pct = num("oil_level_percentile_756", np.nan)
+    if not np.isfinite(level_pct):
+        level_pct = num("oil_level_percentile_252", np.nan)
+    persistence = num("oil_high_level_persistence_60d", np.nan)
+    breadth = num("energy_breadth_20d", np.nan)
+    inventory = num("crude_inventory_draw_z", np.nan)
+    spread_pct = num("brent_wti_spread_percentile_252", np.nan)
+
+    high_level = np.isfinite(level_pct) and level_pct >= float(structural_cfg.get("qualification_level_percentile", 85.0))
+    persistent = np.isfinite(persistence) and persistence >= float(structural_cfg.get("qualification_persistence", 0.40))
+    inventory_stress = np.isfinite(inventory) and inventory >= float(structural_cfg.get("qualification_inventory_draw_z", 1.0))
+    spread_stress = np.isfinite(spread_pct) and spread_pct >= float(structural_cfg.get("qualification_spread_percentile", 85.0))
+    breadth_confirmed = np.isfinite(breadth) and breadth >= float(structural_cfg.get("qualification_breadth", 0.60))
+
+    # Keep the engine's confirmed-event policy: high level + persistence, or
+    # high level + supply confirmation, or very high level + inventory stress.
+    structural_qualified = bool(
+        (high_level and persistent)
+        or (high_level and (inventory_stress or spread_stress))
+        or (np.isfinite(level_pct) and level_pct >= 90.0 and inventory_stress)
+    )
+    momentum_ok = momentum >= float(oil_cfg.get("momentum_activation_score", threshold))
+    structural_ok = structural_qualified and structural >= float(oil_cfg.get("structural_activation_score", threshold))
 
     if momentum_ok and structural_ok:
         event_type, event_score = "COMBINED", max(momentum, structural)
@@ -966,39 +1000,54 @@ def _canonicalize_result_event_state(result: Dict[str, object], activation_score
         event_type, event_score = "MOMENTUM", momentum
     elif structural_ok:
         event_type, event_score = "STRUCTURAL", structural
-    elif pressure >= float(out.get("oil_pressure_display_threshold", 0.20) or 0.20):
+    elif pressure >= float(oil_cfg.get("pressure_display_threshold", 0.20)):
         event_type, event_score = "PRESSURE_ONLY", 0.0
     else:
         event_type, event_score = "NONE", 0.0
+
+    if structural_qualified:
+        reason = "Structural qualification confirmed by high price level plus persistence/supply confirmation."
+    elif np.isfinite(level_pct) and level_pct >= float(oil_cfg.get("structural", {}).get("pressure_level_percentile", 75.0)):
+        reason = "Structural pressure present, but confirmed-event qualification is not met."
+    else:
+        reason = "Structural pressure below the confirmed-event qualification zone."
+
+    overlay_active = flag(out.get("commodity_event_active", False))
+    if not (event_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"}):
+        overlay_active = False
+        overlay_reason = "No confirmed oil event; commodity event overlay must remain disabled."
+    else:
+        overlay_reason = str(out.get("commodity_event_reason", "Confirmed oil event overlay state."))
 
     out.update({
         "oil_pressure_score": round(pressure, 6),
         "oil_event_score": round(float(np.clip(event_score, 0.0, 1.0)), 6),
         "oil_event_type": event_type,
         "oil_event_active": bool(event_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"}),
-        "oil_structural_qualified": bool(qualified),
+        "oil_structural_qualified": bool(structural_qualified),
         "oil_momentum_confirmed": bool(momentum_ok),
+        "oil_structural_high_level": bool(high_level),
+        "oil_structural_persistent": bool(persistent),
+        "oil_structural_inventory_stress": bool(inventory_stress),
+        "oil_structural_spread_stress": bool(spread_stress),
+        "oil_structural_breadth_confirmed": bool(breadth_confirmed),
+        "oil_qualification_reason": reason,
+        "commodity_event_active": bool(overlay_active),
+        "commodity_event_reason": overlay_reason,
     })
     return out
 
 
 def append_history(result: Dict[str, object]):
-    """Persist a canonical result without dtype-unsafe scalar mutation.
-
-    pandas may infer historical boolean-like columns as float64 (0.0/1.0).
-    Assigning a Python bool into those columns with ``.at`` can therefore raise
-    ``LossySetitemError`` / ``TypeError`` on newer pandas versions.  We avoid
-    scalar mutation completely: the last canonical row is rebuilt as a normal
-    record and concatenated back into the frame.
-    """
+    """Persist a canonical row without dtype-unsafe scalar mutation."""
+    engine_cfg = MacroRegimeEngine().config
     activation_score = float(
-        MacroRegimeEngine().config.get("event_overlay", {})
+        engine_cfg.get("event_overlay", {})
         .get("oil", {})
         .get("activation_score", 0.20)
     )
-    result = _canonicalize_result_event_state(result, activation_score)
-
-    new_row = pd.DataFrame([result])
+    canonical_result = _canonicalize_result_event_state(result, activation_score)
+    new_row = pd.DataFrame([canonical_result])
 
     if os.path.exists(HISTORY_FILE):
         try:
@@ -1008,67 +1057,66 @@ def append_history(result: Dict[str, object]):
     else:
         old = pd.DataFrame()
 
-    # Make manual retries idempotent. Remove the existing record for the same
-    # timestamp before appending the freshly canonicalized row.
     if not old.empty and "date" in old.columns and "date" in new_row.columns:
-        same_date = old["date"].astype(str).eq(str(new_row.iloc[0]["date"]))
-        old = old.loc[~same_date].copy()
+        old = old.loc[old["date"].astype(str) != str(new_row.iloc[0]["date"])].copy()
 
     all_columns = list(dict.fromkeys(list(old.columns) + list(new_row.columns)))
-    old_aligned = old.reindex(columns=all_columns)
-    new_aligned = new_row.reindex(columns=all_columns)
-    combined = pd.concat([old_aligned, new_aligned], ignore_index=True, sort=False)
+    combined = pd.concat(
+        [old.reindex(columns=all_columns), new_row.reindex(columns=all_columns)],
+        ignore_index=True,
+        sort=False,
+    )
 
-    # Rebuild the final row rather than assigning booleans into float columns.
-    last_row = combined.iloc[-1].to_dict()
-    canonical_last = _canonicalize_result_event_state(last_row, activation_score)
-    combined_rows = combined.iloc[:-1].to_dict(orient="records")
-    combined_rows.append(canonical_last)
-    combined = pd.DataFrame(combined_rows, columns=all_columns)
+    # Rebuild the final row instead of assigning booleans/scalars into pre-typed
+    # float columns. This is safe on current pandas 2.x and future strict dtypes.
+    final_dict = _canonicalize_result_event_state(combined.iloc[-1].to_dict(), activation_score)
+    rows = combined.iloc[:-1].to_dict(orient="records")
+    rows.append(final_dict)
+    combined = pd.DataFrame(rows, columns=all_columns)
 
     combined.to_csv(HISTORY_FILE, index=False)
 
-    # Round-trip validation. CSV does not preserve Python bool dtype reliably,
-    # so compare boolean fields semantically and numeric fields with tolerance.
     persisted = pd.read_csv(HISTORY_FILE)
     if persisted.empty:
         raise RuntimeError("HISTORY_PERSISTENCE_FAILURE: cms_history.csv is empty after write")
 
-    persisted_last = persisted.iloc[-1].to_dict()
-    check = _canonicalize_result_event_state(persisted_last, activation_score)
-
-    def _flag(value) -> bool:
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-    def _num(value, default=0.0) -> float:
-        try:
-            x = float(value)
-            return x if np.isfinite(x) else float(default)
-        except (TypeError, ValueError):
-            return float(default)
-
-    for field in ("oil_event_active", "oil_structural_qualified", "oil_momentum_confirmed"):
-        if _flag(persisted_last.get(field)) != _flag(check.get(field)):
+    persisted_last = _canonicalize_result_event_state(persisted.iloc[-1].to_dict(), activation_score)
+    check_fields = (
+        "oil_event_type", "oil_event_active", "oil_event_score",
+        "oil_pressure_score", "oil_structural_qualified",
+        "oil_momentum_confirmed", "commodity_event_active"
+    )
+    for field in check_fields:
+        saved = persisted.iloc[-1].get(field)
+        expected = persisted_last.get(field)
+        if field in {"oil_event_type"}:
+            ok = str(saved).upper() == str(expected).upper()
+        elif field in {"oil_event_active", "oil_structural_qualified", "oil_momentum_confirmed", "commodity_event_active"}:
+            ok = flag_value(saved) == flag_value(expected)
+        else:
+            try:
+                ok = abs(float(saved) - float(expected)) <= 0.01
+            except (TypeError, ValueError):
+                ok = False
+        if not ok:
             raise RuntimeError(
-                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} "
-                f"persisted={persisted_last.get(field)!r} canonical={check.get(field)!r}"
+                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} persisted={saved!r} canonical={expected!r}"
             )
 
-    if str(persisted_last.get("oil_event_type", "NONE")).upper() != str(
-        check.get("oil_event_type", "NONE")
-    ).upper():
-        raise RuntimeError(
-            "HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: oil_event_type "
-            f"persisted={persisted_last.get('oil_event_type')!r} "
-            f"canonical={check.get('oil_event_type')!r}"
-        )
 
-    for field in ("oil_event_score", "oil_pressure_score"):
-        if abs(_num(persisted_last.get(field)) - _num(check.get(field))) > 0.01:
-            raise RuntimeError(
-                f"HISTORY_EVENT_STATE_PERSISTENCE_FAILURE: {field} "
-                f"persisted={persisted_last.get(field)!r} canonical={check.get(field)!r}"
-            )
+def flag_value(value) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "on"}:
+        return True
+    if text in {"false", "no", "off", "nan", "none", ""}:
+        return False
+    try:
+        return bool(float(text))
+    except (TypeError, ValueError):
+        return False
+
 
 if __name__ == "__main__":
     engine = UltimateSentinelEngine(FRED_API_KEY)

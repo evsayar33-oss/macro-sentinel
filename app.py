@@ -216,7 +216,7 @@ for col, (label, value) in zip(metric_cols, metric_values):
 st.subheader("🛢️ Petrol / Yapısal Olay Katmanı")
 oil_col, structural_col, unknown_col, breadth_col, quality_col = st.columns(5)
 with oil_col:
-    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Event {oil_score:.2f} · Baskı {oil_pressure:.2f}")
+    st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=(f"Teyit {oil_score:.2f} · Baskı {oil_pressure:.2f}" if oil_active else f"Teyit yok · Baskı {oil_pressure:.2f}"))
 with structural_col:
     display_type = {"PRESSURE_ONLY": "YAPISAL BASKI", "NONE": "YOK", "STRUCTURAL": "YAPISAL EVENT", "MOMENTUM": "MOMENTUM EVENT", "COMBINED": "BİRLEŞİK EVENT"}.get(oil_event_type, oil_event_type)
     st.metric("Olay Durumu", display_type, help="YAPISAL BASKI = pressure var fakat teyit yok. YAPISAL EVENT = yapısal teyit var. MOMENTUM EVENT = kısa vadeli teyit var. BİRLEŞİK EVENT = ikisi de teyitli.")
@@ -250,10 +250,13 @@ if oil_active:
         f"Allocation overlay: {'AKTİF' if oil_overlay_applied else 'DEVREDE DEĞİL'}. {text_or(latest, 'commodity_event_reason', '')}"
     )
 else:
+    status_text = "YOK" if oil_event_type == "NONE" else "PRESSURE-ONLY"
     st.caption(
-        f"Petrol event pasif. Baskı={oil_pressure:.2f} · Momentum={oil_momentum:.2f} · Yapısal={oil_structural:.2f}. "
+        f"Petrol event durumu: {status_text}. "
+        f"Baskı={oil_pressure:.2f} · Momentum={oil_momentum:.2f} · Yapısal={oil_structural:.2f}. "
         f"Yapısal qualification={'EVET' if oil_structural_qualified else 'HAYIR'}. "
-        "Pressure-only durumları allocation değiştirmez; yalnızca izlenir."
+        f"Allocation overlay={'AKTİF' if oil_overlay_applied else 'PASİF'}. "
+        "Pressure-only durumları confirmed event değildir; teyit gelmeden event skoru 0 tutulur."
     )
 if unknown_active:
     st.warning(
