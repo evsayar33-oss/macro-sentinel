@@ -236,9 +236,9 @@ def main():
         "sensitivity_top_sharpe": top_sharpe[cols_display].to_dict(orient="records")
     }
 
-    with open("/tmp/macro-sentinel/stress_test_results.json", "w", encoding="utf-8") as f:
+    with open("stress_test_results.json", "w", encoding="utf-8") as f:
         json.dump(stress_output, f, indent=2, ensure_ascii=False)
-    print("\nSonuçlar /tmp/macro-sentinel/stress_test_results.json dosyasına kaydedildi.")
+    print("\nSonuçlar stress_test_results.json dosyasına kaydedildi.")
 
 if __name__ == "__main__":
     main()
