@@ -3,7 +3,7 @@ Monte Carlo Stress Testing & Asset Allocation Sensitivity Engine
 1. 10,000 Path Monte Carlo Simulation (Fat-tailed Student-t / GARCH-like regime shocks)
 2. Value at Risk (VaR 95%, 99%) & Conditional VaR (CVaR / Expected Shortfall)
 3. Crypto (BTC) & Commodity (Oil) Allocation Sensitivity Grid (0% to 15%)
-4. Optimal Max Sharpe / Min Drawdown Frontier
+4. Descriptive Max-Sharpe / Min-Drawdown sensitivity view
 """
 
 import os
@@ -133,7 +133,7 @@ def run_crypto_commodity_sensitivity_analysis(df_classified: pd.DataFrame) -> pd
     Iterates over a 2D grid of Crypto (BTC) and Commodity (Oil) base weights
     from 0% to 15% (with Cash absorbing or supplying the difference),
     calculating Annualized Return, Max Drawdown, Sharpe, and Calmar Ratio.
-    Identifies the mathematical Pareto-optimal sweet spot.
+    Produces descriptive sensitivity tables; no single grid cell is treated as universally optimal.
     """
     spx_ret = df_classified['spx'].pct_change().fillna(0.0)
     bond_ret = df_classified['ust10y'].pct_change().fillna(0.0)
@@ -222,11 +222,11 @@ def main():
     top_calmar = sens_df.sort_values(by="calmar_raw", ascending=False).head(5)
     top_sharpe = sens_df.sort_values(by="sharpe_raw", ascending=False).head(5)
 
-    print("\n🎯 En Yüksek Calmar Oranı (En Düşük Drawdown ile En Yüksek Getiri - Zirve Risk Verimliliği):")
+    print("\n🎯 Calmar metriğine göre en üst duyarlılık gözlemleri (betimleyici):")
     cols_display = ["Kripto (BTC) %", "Emtia (Petrol) %", "Nakit %", "Yıllık Getiri (%)", "Max Drawdown (%)", "Sharpe Oranı", "Calmar Oranı", "Toplam Getiri (%)"]
     print(top_calmar[cols_display].to_string(index=False))
 
-    print("\n🚀 En Yüksek Sharpe Oranı:")
+    print("\n🚀 Sharpe metriğine göre en üst duyarlılık gözlemleri (betimleyici):")
     print(top_sharpe[cols_display].to_string(index=False))
 
     # Save outputs to JSON
