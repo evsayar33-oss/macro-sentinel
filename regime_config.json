@@ -1,7 +1,7 @@
 {
   "system_architecture": {
     "module_name": "macro-event-interpretation-system",
-    "version": "2.0",
+    "version": "2.3",
     "principles": {
       "mutual_exclusivity": true,
       "active_regime_count": 1,
@@ -12,7 +12,11 @@
       "fail_closed_on_data_failure": true,
       "minimum_history_days": 126,
       "dynamic_event_thresholds": true,
-      "unknown_event_guard": true
+      "unknown_event_guard": true,
+      "trailing_reference_excludes_current_observation": true,
+      "metadata_preservation": true,
+      "market_closed_hold": true,
+      "single_source_of_truth_for_allocation": "regime_config.json"
     }
   },
   "priority_rules": {
@@ -143,8 +147,8 @@
             "indicator": "Ana Tetikleyici (Reel Faiz)",
             "ticker": "FRED:DFII10 (10Y TIPS)",
             "formula": "1_day_change_52w_zscore",
-            "threshold": "Z > 1.5",
-            "threshold_val": 1.5
+            "threshold": "Z > 1.4 OR persistent real-rate state",
+            "threshold_val": 1.4
           },
           {
             "indicator": "Ayrıştırıcı (Breakeven Enflasyon)",
@@ -174,12 +178,12 @@
         }
       ],
       "default_allocation": {
-        "cash": 70,
-        "gold": 11,
-        "commodity": 0,
-        "bond": 10,
-        "equity": 9,
-        "crypto": 0
+        "cash": 67.26,
+        "gold": 11.0,
+        "commodity": 2.94,
+        "bond": 10.0,
+        "equity": 8.8,
+        "crypto": 0.0
       }
     },
     {
@@ -302,18 +306,19 @@
     "r5_dxy_min": -2.5,
     "r5_dxy_max": 0.6,
     "r5_vix_pct": 32.0,
-    "r5_ndl_z": 0.0
+    "r5_ndl_z": 0.0,
+    "r3_tips_level_z": 1.0
   },
   "backtest_metrics": {
     "strategy": {
-      "name": "⚡ Macro Sentinel Apex (Optimum)",
-      "allocation_desc": "Dinamik 6 Varlık (Rejim Zirve Hassasiyeti)",
-      "annualized_return": 10.62,
-      "annualized_volatility": 3.66,
-      "sharpe_ratio": 2.08,
-      "max_drawdown": 8.16,
-      "calmar_ratio": 1.3,
-      "total_return": 147.35
+      "name": "⚡ Macro Sentinel Dynamic",
+      "allocation_desc": "Dinamik 6 Varlık (Rejim + Olay Katmanı)",
+      "annualized_return": 10.3,
+      "annualized_volatility": 3.67,
+      "sharpe_ratio": 1.99,
+      "max_drawdown": 8.75,
+      "calmar_ratio": 1.18,
+      "total_return": 141.13
     },
     "benchmark_defensive_shield": {
       "name": "🛡️ Benchmark 1: Defensive Shield",
@@ -337,7 +342,7 @@
     },
     "benchmark_taleb_barbell": {
       "name": "🛡️ Benchmark 3: Taleb Barbell Asymmetric",
-      "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto (Ultra Düşük Risk)",
+      "allocation_desc": "%85 Nakit & T-Bill / %10 Altın / %5 Kripto",
       "annualized_return": 6.35,
       "annualized_volatility": 2.18,
       "sharpe_ratio": 1.54,
@@ -406,6 +411,24 @@
       ],
       "crude_stocks": [
         "EIA:WCESTUS1"
+      ]
+    },
+    "weekend_runs_enabled": false,
+    "fred_public_csv_fallback_enabled": true,
+    "fallback_provenance_required": true,
+    "secondary_missing_does_not_invalidate_decision": true,
+    "critical_fallbacks": {
+      "CL=F": [
+        "FRED:DCOILWTICO"
+      ],
+      "BZ=F": [
+        "FRED:DCOILBRENTEU"
+      ],
+      "^VIX3M": [
+        "FRED:VXVCLS"
+      ],
+      "FRED_all_series": [
+        "FRED_GRAPH_CSV"
       ]
     }
   },
@@ -484,6 +507,23 @@
     "max_threshold_shift_pct": 10.0,
     "walk_forward_validation_required": true,
     "auto_commit_model_changes": false,
-    "description": "Daily system-health and event-quality audit is allowed; parameter changes are not auto-committed without out-of-sample validation."
+    "description": "Daily system-health and event-quality audit is allowed; parameter changes are not auto-committed without out-of-sample validation.",
+    "minimum_completed_event_observations": 10,
+    "auto_threshold_update": false,
+    "audit_uses_future_outcomes_only_for_past_events": true,
+    "audit_fields": [
+      "audit_completed_oil_events_5d",
+      "audit_oil_positive_rate_5d",
+      "audit_completed_structural_events_5d",
+      "audit_structural_positive_rate_5d",
+      "audit_completed_momentum_events_5d",
+      "audit_momentum_positive_rate_5d"
+    ]
+  },
+  "regime_semantics": {
+    "r3_high_real_rate_floor": 2.0,
+    "r3_daily_shock_label": "Reel Faiz Şoku",
+    "r3_persistent_label": "Reel Faiz Kısıtlayıcı Rejimi",
+    "r3_priority": "hard_shocks_then_persistent_rate_constraint_then_risk_on"
   }
 }
