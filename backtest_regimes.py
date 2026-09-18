@@ -28,6 +28,17 @@ def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-
     oil_price = np.zeros(n)
     oil_price[0] = 60.0
 
+    brent_price = np.zeros(n)
+    brent_price[0] = 63.0
+    heating_oil = np.zeros(n)
+    heating_oil[0] = 1.8
+    gasoline_price = np.zeros(n)
+    gasoline_price[0] = 1.7
+    natgas_price = np.zeros(n)
+    natgas_price[0] = 2.5
+    crude_stocks = np.zeros(n)
+    crude_stocks[0] = 430.0
+
     freight_index = np.zeros(n)
     freight_index[0] = 1200.0
 
@@ -170,6 +181,13 @@ def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-
 
         spx_price[i] = max(100.0, spx_price[i - 1] * (1.0 + spx_ret))
         oil_price[i] = max(10.0, oil_price[i - 1] * (1.0 + oil_ret))
+        brent_price[i] = max(15.0, brent_price[i - 1] * (1.0 + oil_ret * 0.95 + np.random.normal(0.0, 0.003)))
+        heating_oil[i] = max(0.5, heating_oil[i - 1] * (1.0 + oil_ret * 1.10 + np.random.normal(0.0, 0.004)))
+        gasoline_price[i] = max(0.5, gasoline_price[i - 1] * (1.0 + oil_ret * 0.90 + np.random.normal(0.0, 0.004)))
+        natgas_price[i] = max(0.8, natgas_price[i - 1] * (1.0 + oil_ret * 0.45 + np.random.normal(0.0, 0.01)))
+        crude_stocks[i] = max(300.0, crude_stocks[i - 1] + np.random.normal(0.0, 2.5))
+        if year == 2022 and month in [2, 3, 4, 5, 6]:
+            crude_stocks[i] = max(300.0, crude_stocks[i - 1] - 3.5 + np.random.normal(0.0, 1.0))
         freight_index[i] = max(300.0, freight_index[i - 1] * (1.0 + freight_ret))
         hy_oas[i] = np.clip(hy_oas[i - 1] + d_hy, 2.5, 12.0)
         ig_oas[i] = np.clip(ig_oas[i - 1] + d_ig, 0.8, 4.5)
@@ -191,6 +209,11 @@ def generate_synthetic_macro_history(start_date="2018-01-01", end_date="2026-09-
         'date': dates,
         'spx': spx_price,
         'oil': oil_price,
+        'brent': brent_price,
+        'heating_oil': heating_oil,
+        'gasoline': gasoline_price,
+        'natgas': natgas_price,
+        'crude_stocks': crude_stocks,
         'freight': freight_index,
         'hy_oas': hy_oas,
         'ig_oas': ig_oas,
@@ -312,6 +335,9 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
     carry_bars = df.loc["2024-08-01":"2024-08-15"]
     carry_detected = (carry_bars['confirmed_regime_id'] == 2).any()
 
+    structural_oil_bars = df.loc["2022-02-01":"2022-06-30"]
+    structural_oil_detected = (structural_oil_bars['oil_structural_score'] >= 0.20).any() if 'oil_structural_score' in structural_oil_bars.columns else False
+
     regime_counts = df['confirmed_regime_name'].value_counts(normalize=True) * 100.0
     regime_dist = {str(k): round(float(v), 1) for k, v in regime_counts.items()}
 
@@ -325,7 +351,8 @@ def run_portfolio_backtest(df_classified: pd.DataFrame) -> Dict[str, Any]:
             "covid_2020_detected": bool(covid_detected),
             "stagflation_2022_detected": bool(stagflation_detected),
             "rate_shock_2022_detected": bool(rate_shock_detected),
-            "jpy_carry_2024_detected": bool(carry_detected)
+            "jpy_carry_2024_detected": bool(carry_detected),
+            "oil_structural_event_2022_detected": bool(structural_oil_detected)
         }
     }
 
