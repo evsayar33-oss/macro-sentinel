@@ -43,6 +43,7 @@ jobs:
       - name: Run live Macro Sentinel engine
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python main.py
 
       - name: Validate latest decision
@@ -65,6 +66,11 @@ jobs:
           print(f'allocation_total={total:.4f}')
           print(f'regime={row.get("regime_name", "UNKNOWN")}')
           print(f'oil_event_score={row.get("oil_event_score", 0.0)}')
+          print(f'oil_event_type={row.get("oil_event_type", "NONE")}')
+          print(f'oil_momentum_score={row.get("oil_momentum_score", 0.0)}')
+          print(f'oil_structural_score={row.get("oil_structural_score", 0.0)}')
+          print(f'oil_level_percentile_252={row.get("oil_level_percentile_252", 0.0)}')
+          print(f'energy_breadth_20d={row.get("energy_breadth_20d", 0.0)}')
           print(f'commodity_weight={row.get("commodity_weight", 0.0)}')
 
           if abs(total - 100.0) > 0.05:
