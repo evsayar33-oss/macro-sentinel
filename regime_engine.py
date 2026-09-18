@@ -52,6 +52,17 @@ class MacroRegimeEngine:
         return (s - mean) / (std.replace(0.0, np.nan) + 1e-9)
 
     @staticmethod
+    def calc_trailing_z(series: pd.Series, window: int = 252, min_periods: Optional[int] = None) -> pd.Series:
+        """Z-score current observation against prior observations only."""
+        s = pd.to_numeric(series, errors="coerce")
+        if min_periods is None:
+            min_periods = max(40, window // 4)
+        ref = s.shift(1)
+        mean = ref.rolling(window=window, min_periods=min_periods).mean()
+        std = ref.rolling(window=window, min_periods=min_periods).std()
+        return (s - mean) / (std.replace(0.0, np.nan) + 1e-9)
+
+    @staticmethod
     def calc_rolling_slope(series: pd.Series, window: int = 10) -> pd.Series:
         s = pd.to_numeric(series, errors="coerce")
 
@@ -82,6 +93,22 @@ class MacroRegimeEngine:
 
         return s.rolling(window=window, min_periods=min_periods).apply(_pct, raw=True)
 
+    def calc_trailing_percentile(self, series: pd.Series, window: int = 252, min_periods: Optional[int] = None) -> pd.Series:
+        """Percentile of current value versus the previous window only."""
+        s = pd.to_numeric(series, errors="coerce")
+        if min_periods is None:
+            min_periods = max(40, window // 4)
+
+        def _pct(x: np.ndarray) -> float:
+            current = x[-1]
+            hist = x[:-1]
+            clean = hist[np.isfinite(hist)]
+            if not np.isfinite(current) or len(clean) < 2:
+                return np.nan
+            return float(np.mean(clean <= current) * 100.0)
+
+        return s.rolling(window=window + 1, min_periods=min_periods + 1).apply(_pct, raw=True)
+
     def prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Build all point-in-time indicators. No future observations are used."""
         p = df.copy().sort_index()
@@ -94,33 +121,25 @@ class MacroRegimeEngine:
             oil_ret_20d = oil.pct_change(20)
             oil_vol_20d = oil_ret_1d.rolling(20, min_periods=10).std()
 
-            p["oil_ret_5d_z"] = self.calc_rolling_z(oil_ret_5d, 252)
-            p["oil_ret_20d_z"] = self.calc_rolling_z(oil_ret_20d, 252)
-            p["oil_vol_20d_z"] = self.calc_rolling_z(oil_vol_20d, 252)
+            p["oil_ret_5d_z"] = self.calc_trailing_z(oil_ret_5d, 252)
+            p["oil_ret_20d_z"] = self.calc_trailing_z(oil_ret_20d, 252)
+            p["oil_vol_20d_z"] = self.calc_trailing_z(oil_vol_20d, 252)
 
             trend_raw = oil_ret_20d / (oil_vol_20d * np.sqrt(20.0) + 1e-9)
-            p["oil_trend_strength"] = self.calc_rolling_z(trend_raw, 252)
+            p["oil_trend_strength"] = self.calc_trailing_z(trend_raw, 252)
 
             # Adaptive percentile: how unusual is today's absolute 5d move
             # relative to the prior ~1y distribution? This is point-in-time.
             abs_5d = oil_ret_5d.abs()
-            p["oil_abs_5d_percentile"] = abs_5d.rolling(252, min_periods=63).apply(
-                lambda x: float(np.mean(x <= x[-1]) * 100.0) if np.isfinite(x[-1]) else np.nan,
-                raw=True,
-            )
+            p["oil_abs_5d_percentile"] = self.calc_trailing_percentile(abs_5d, 252, min_periods=63)
 
-            # Structural oil-price layer: price LEVEL and persistence are separate
-            # from short-term momentum. This lets the engine distinguish:
-            #   (a) "oil is spiking now" from
-            #   (b) "oil remains abnormally expensive / structurally stressed".
-            # Structural level uses a ~3-year rolling distribution, deliberately
-            # slower than the momentum layer. This avoids calling a persistent
-            # price shock "normal" merely because it has lasted for a few months.
-            p["oil_level_z_756"] = self.calc_rolling_z(oil, 756, min_periods=126)
-            p["oil_level_percentile_756"] = self.calc_rolling_percentile(oil, 756, min_periods=126)
-            # Backward-compatible aliases used by the dashboard.
-            p["oil_level_z_252"] = p["oil_level_z_756"]
-            p["oil_level_percentile_252"] = p["oil_level_percentile_756"]
+            # Structural oil-price layer: maintain a true 252-session view and a
+            # slower ~3-year view. Structural qualification uses the 756-session
+            # distribution; the 252-session view remains a separate dashboard sensor.
+            p["oil_level_z_252"] = self.calc_trailing_z(oil, 252, min_periods=63)
+            p["oil_level_percentile_252"] = self.calc_trailing_percentile(oil, 252, min_periods=63)
+            p["oil_level_z_756"] = self.calc_trailing_z(oil, 756, min_periods=126)
+            p["oil_level_percentile_756"] = self.calc_trailing_percentile(oil, 756, min_periods=126)
             level_pct = p["oil_level_percentile_756"]
             p["oil_high_level_persistence_60d"] = (level_pct >= 85.0).astype(float).rolling(60, min_periods=20).mean()
         else:
@@ -138,8 +157,8 @@ class MacroRegimeEngine:
         # less dependent on a single ticker.
         if "brent" in p.columns:
             brent = pd.to_numeric(p["brent"], errors="coerce")
-            p["brent_level_z_252"] = self.calc_rolling_z(brent, 252, min_periods=63)
-            p["brent_level_percentile_252"] = self.calc_rolling_percentile(brent, 252, min_periods=63)
+            p["brent_level_z_252"] = self.calc_trailing_z(brent, 252, min_periods=63)
+            p["brent_level_percentile_252"] = self.calc_trailing_percentile(brent, 252, min_periods=63)
         else:
             p["brent_level_z_252"] = np.nan
             p["brent_level_percentile_252"] = np.nan
@@ -147,8 +166,8 @@ class MacroRegimeEngine:
         if "brent" in p.columns and "oil" in p.columns:
             spread = pd.to_numeric(p["brent"], errors="coerce") - pd.to_numeric(p["oil"], errors="coerce")
             p["brent_wti_spread"] = spread
-            p["brent_wti_spread_z_252"] = self.calc_rolling_z(spread, 252, min_periods=63)
-            p["brent_wti_spread_percentile_252"] = self.calc_rolling_percentile(spread, 252, min_periods=63)
+            p["brent_wti_spread_z_252"] = self.calc_trailing_z(spread, 252, min_periods=63)
+            p["brent_wti_spread_percentile_252"] = self.calc_trailing_percentile(spread, 252, min_periods=63)
         else:
             p["brent_wti_spread"] = np.nan
             p["brent_wti_spread_z_252"] = np.nan
@@ -169,7 +188,7 @@ class MacroRegimeEngine:
         if "crude_stocks" in p.columns:
             stocks = pd.to_numeric(p["crude_stocks"], errors="coerce")
             draw = -stocks.diff(1)
-            p["crude_inventory_draw_z"] = self.calc_rolling_z(draw, 52, min_periods=20)
+            p["crude_inventory_draw_z"] = self.calc_trailing_z(draw, 52, min_periods=20)
         else:
             p["crude_inventory_draw_z"] = np.nan
 
@@ -242,9 +261,13 @@ class MacroRegimeEngine:
         # Real rates / breakeven / curve.
         if "tips10y" in p.columns:
             tips = pd.to_numeric(p["tips10y"], errors="coerce")
-            p["tips_1d_z"] = self.calc_rolling_z(tips.diff(1), 252)
+            p["tips_1d_z"] = self.calc_trailing_z(tips.diff(1), 252)
+            p["tips_level_z"] = self.calc_trailing_z(tips, 252)
+            p["tips_level_percentile_252"] = self.calc_trailing_percentile(tips, 252)
         else:
             p["tips_1d_z"] = 0.0
+            p["tips_level_z"] = 0.0
+            p["tips_level_percentile_252"] = 50.0
 
         if "t10yie" in p.columns:
             p["t10yie_z"] = self.calc_rolling_z(pd.to_numeric(p["t10yie"], errors="coerce"), 252)
@@ -343,11 +366,17 @@ class MacroRegimeEngine:
         r2_active = bool(r2_trigger and r2_confirm)
 
         tips_chg_z = self._safe_float(row.get("tips_1d_z"))
+        tips_level_z = self._safe_float(row.get("tips_level_z"))
+        tips_level_pct = self._safe_float(row.get("tips_level_percentile_252"), 50.0)
         tips_lvl = self._safe_float(row.get("tips10y"), 2.0)
         t10yie_z = self._safe_float(row.get("t10yie_z"))
-        r3_t1 = tips_chg_z > th["r3_tips_z"] or tips_lvl >= 2.0
+
+        semantics = self.config.get("regime_semantics", {})
+        high_real_floor = float(semantics.get("r3_high_real_rate_floor", 2.0))
+        r3_daily_shock = tips_chg_z > th["r3_tips_z"]
+        r3_persistent = tips_lvl >= high_real_floor or tips_level_z > th.get("r3_tips_level_z", 1.0)
         r3_t2 = t10yie_z < th["r3_t10yie_z"]
-        r3_active = bool(r3_t1 and r3_t2)
+        r3_active = bool((r3_daily_shock or r3_persistent) and r3_t2)
 
         d2 = self._safe_float(row.get("delta_dgs2_5d"))
         d10 = self._safe_float(row.get("delta_dgs10_5d"))
@@ -413,14 +442,15 @@ class MacroRegimeEngine:
             },
             3: {
                 "id": 3,
-                "name": "Reel Faiz Şoku",
-                "type": "SHOCK",
-                "trigger_met": bool(r3_t1 and r3_t2),
-                "confirm_met": True,
+                "name": "Reel Faiz Şoku" if r3_daily_shock else "Reel Faiz Kısıtlayıcı Rejimi",
+                "type": "SHOCK" if r3_daily_shock else "CONSTRAINT",
+                "trigger_met": bool((r3_daily_shock or r3_persistent) and r3_t2),
+                "confirm_met": bool(r3_t2),
                 "active": r3_active,
-                "main_trigger_z": max(tips_chg_z, (tips_lvl - 1.5) * 2.0),
+                "main_trigger_z": max(abs(tips_chg_z), abs(tips_level_z)),
+                "severity_source": "DAILY_SHOCK" if r3_daily_shock else "PERSISTENT_LEVEL" if r3_persistent else "NONE",
                 "subtype": subtype_r3,
-                "diagnostics": {"tips_chg_z": tips_chg_z, "tips_lvl": tips_lvl, "t10yie_z": t10yie_z, "d2": d2, "d10": d10},
+                "diagnostics": {"tips_chg_z": tips_chg_z, "tips_level_z": tips_level_z, "tips_level_pct": tips_level_pct, "tips_lvl": tips_lvl, "t10yie_z": t10yie_z, "d2": d2, "d10": d10},
             },
             4: {
                 "id": 4,
@@ -447,31 +477,34 @@ class MacroRegimeEngine:
         }
 
     def resolve_conflicts(self, regime_evals: Dict[int, Dict[str, Any]], row: pd.Series) -> Dict[str, Any]:
-        active_shocks = [r for rid, r in regime_evals.items() if rid in (1, 2, 3, 4) and r["active"]]
-        if active_shocks:
-            r1 = regime_evals[1]["active"]
-            r3 = regime_evals[3]["active"]
-            if r1 and r3:
-                t10yie_z = self._safe_float(row.get("t10yie_z"))
-                selected = regime_evals[1] if t10yie_z > 0.5 else regime_evals[3]
-                return {
-                    "candidate_id": selected["id"],
-                    "candidate_name": selected["name"],
-                    "candidate_type": selected["type"],
-                    "candidate_subtype": selected["subtype"],
-                    "main_trigger_z": selected["main_trigger_z"],
-                    "conflict_note": "R1/R3 conflict resolved by breakeven-inflation state.",
-                    "all_triggered": [r["id"] for r in active_shocks],
-                }
-            selected = max(active_shocks, key=lambda x: abs(self._safe_float(x.get("main_trigger_z"))))
+        active_hard_shocks = [r for rid, r in regime_evals.items() if rid in (1, 2, 4) and r["active"]]
+        if regime_evals[3]["active"] and regime_evals[3].get("type") == "SHOCK":
+            active_hard_shocks.append(regime_evals[3])
+
+        if active_hard_shocks:
+            selected = max(active_hard_shocks, key=lambda x: abs(self._safe_float(x.get("main_trigger_z"))))
             return {
                 "candidate_id": selected["id"],
                 "candidate_name": selected["name"],
                 "candidate_type": selected["type"],
                 "candidate_subtype": selected["subtype"],
                 "main_trigger_z": selected["main_trigger_z"],
-                "conflict_note": f"Multiple shocks resolved by highest absolute trigger magnitude: R{selected['id']}.",
-                "all_triggered": [r["id"] for r in active_shocks],
+                "severity_source": selected.get("severity_source", "NONE"),
+                "conflict_note": f"Multiple hard risk states resolved by trigger magnitude: R{selected['id']}.",
+                "all_triggered": [r["id"] for r in active_hard_shocks],
+            }
+
+        if regime_evals[3]["active"]:
+            selected = regime_evals[3]
+            return {
+                "candidate_id": selected["id"],
+                "candidate_name": selected["name"],
+                "candidate_type": selected["type"],
+                "candidate_subtype": selected["subtype"],
+                "main_trigger_z": selected["main_trigger_z"],
+                "severity_source": selected.get("severity_source", "PERSISTENT_LEVEL"),
+                "conflict_note": "Persistent restrictive real-rate state active; no hard shock regime confirmed.",
+                "all_triggered": [3],
             }
 
         if regime_evals[5]["active"]:
@@ -516,6 +549,7 @@ class MacroRegimeEngine:
             "confirmed_regime_name": "REJIMSIZ_GECIS",
             "regime_type": "TRANSITION",
             "regime_subtype": "Dengeli / Nötr Piyasa",
+            "regime_severity_source": "NONE",
             "hysteresis_days_left": 0,
             "conflict_note": "",
             "regime_cash_weight": 35.0,
@@ -528,10 +562,12 @@ class MacroRegimeEngine:
             "oil_momentum_score": 0.0,
             "oil_structural_score": 0.0,
             "oil_event_type": "NONE",
+            "oil_event_active": False,
             "commodity_event_active": False,
             "commodity_event_reason": "",
             "unknown_event_score": 0.0,
             "unknown_event_active": False,
+            "unknown_guard_active": False,
         }
         for col, val in defaults.items():
             out[col] = val
@@ -540,6 +576,7 @@ class MacroRegimeEngine:
         current_name = "REJIMSIZ_GECIS"
         current_type = "TRANSITION"
         current_subtype = "Dengeli / Nötr Piyasa"
+        current_severity_source = "NONE"
         hysteresis = 0
 
         for i in range(n):
@@ -566,6 +603,7 @@ class MacroRegimeEngine:
                 current_name = "REJIMSIZ_GECIS"
                 current_type = "TRANSITION"
                 current_subtype = "Extreme Unclassified Event"
+                current_severity_source = "UNKNOWN_EVENT"
                 hysteresis = 0
             elif hysteresis > 0:
                 hysteresis -= 1
@@ -574,11 +612,13 @@ class MacroRegimeEngine:
                 current_name = "REJIMSIZ_GECIS"
                 current_type = "TRANSITION"
                 current_subtype = "Dengeli / Nötr Piyasa"
+                current_severity_source = "NONE"
 
             out.at[out.index[i], "confirmed_regime_id"] = current_id
             out.at[out.index[i], "confirmed_regime_name"] = current_name
             out.at[out.index[i], "regime_type"] = current_type
             out.at[out.index[i], "regime_subtype"] = current_subtype
+            out.at[out.index[i], "regime_severity_source"] = current_severity_source
             out.at[out.index[i], "hysteresis_days_left"] = hysteresis
 
             weights = self.get_portfolio_weights(current_id, current_subtype, row=row)
@@ -599,6 +639,7 @@ class MacroRegimeEngine:
             out.at[out.index[i], "commodity_event_reason"] = str(weights.get("commodity_event_reason", ""))
             out.at[out.index[i], "unknown_event_score"] = float(weights.get("unknown_event_score", 0.0))
             out.at[out.index[i], "unknown_event_active"] = bool(weights.get("unknown_event_active", False))
+            out.at[out.index[i], "unknown_guard_active"] = bool(weights.get("unknown_guard_active", False))
 
         return out
 
@@ -662,7 +703,9 @@ class MacroRegimeEngine:
         if not bool(cfg.get("enabled", True)):
             return 0.0
 
-        level_pct = self._safe_float(row.get("oil_level_percentile_252"), np.nan)
+        level_pct = self._safe_float(row.get("oil_level_percentile_756"), np.nan)
+        if not np.isfinite(level_pct):
+            level_pct = self._safe_float(row.get("oil_level_percentile_252"), np.nan)
         persistence = self._safe_float(row.get("oil_high_level_persistence_60d"), np.nan)
         breadth = self._safe_float(row.get("energy_breadth_20d"), np.nan)
         inventory_draw = self._safe_float(row.get("crude_inventory_draw_z"), np.nan)
@@ -760,16 +803,19 @@ class MacroRegimeEngine:
         w["oil_momentum_score"] = oil_snapshot["momentum_score"]
         w["oil_structural_score"] = oil_snapshot["structural_score"]
         w["oil_event_type"] = oil_snapshot["event_type"]
+        w["oil_event_active"] = oil_score >= float(oil_cfg.get("activation_score", 0.20))
         w["commodity_event_active"] = False
         w["commodity_event_reason"] = "No commodity event overlay active."
+        unknown_activation = float(unknown_cfg.get("activation_score", 0.25))
         w["unknown_event_score"] = unknown_score
-        w["unknown_event_active"] = unknown_score > 0.0
+        w["unknown_event_active"] = unknown_score >= unknown_activation
+        w["unknown_guard_active"] = unknown_score >= unknown_activation
 
         # Systemic liquidity shock is an explicit hard risk-off state.
         if regime_id == 2:
             w["commodity_event_reason"] = "Systemic liquidity shock: commodity overlay disabled."
             w = self._normalize_weights(w)
-            w.update(oil_event_score=oil_score, oil_momentum_score=oil_snapshot["momentum_score"], oil_structural_score=oil_snapshot["structural_score"], oil_event_type=oil_snapshot["event_type"], commodity_event_active=False, unknown_event_score=unknown_score, unknown_event_active=unknown_score > 0.0)
+            w.update(oil_event_score=oil_score, oil_momentum_score=oil_snapshot["momentum_score"], oil_structural_score=oil_snapshot["structural_score"], oil_event_type=oil_snapshot["event_type"], oil_event_active=oil_score >= float(oil_cfg.get("activation_score", 0.20)), commodity_event_active=False, unknown_event_score=unknown_score, unknown_event_active=unknown_score >= unknown_activation, unknown_guard_active=unknown_score >= unknown_activation)
             return w
 
         # Unknown severe anomaly: do not invent direction; reduce exposure and
@@ -827,12 +873,14 @@ class MacroRegimeEngine:
         w["oil_momentum_score"] = oil_snapshot["momentum_score"]
         w["oil_structural_score"] = oil_snapshot["structural_score"]
         w["oil_event_type"] = oil_snapshot["event_type"]
+        w["oil_event_active"] = oil_score >= activation_score
         w["unknown_event_score"] = unknown_score
-        w["unknown_event_active"] = unknown_score > 0.0
+        w["unknown_event_active"] = unknown_score >= unknown_activation
+        w["unknown_guard_active"] = unknown_score >= unknown_activation
         return w
 
     @staticmethod
-    def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+    def _normalize_weights(weights: Dict[str, float]) -> Dict[str, Any]:
         keys = ("cash", "gold", "bond", "equity", "commodity", "crypto")
         clean = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
         total = sum(clean.values())
@@ -840,20 +888,28 @@ class MacroRegimeEngine:
             clean = {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
         elif abs(total - 100.0) > 1e-9:
             clean = {k: v * 100.0 / total for k, v in clean.items()}
+        # Preserve non-weight metadata across normalization.
+        for k, v in weights.items():
+            if k not in keys:
+                clean[k] = v
         return clean
 
     def get_portfolio_weights(self, regime_id: int, subtype: str = "", row: Optional[pd.Series] = None) -> Dict[str, Any]:
         weights_map = {
             0: {"cash": 35.0, "gold": 20.0, "bond": 20.0, "equity": 15.0, "commodity": 5.0, "crypto": 5.0},
-            1: {"cash": 40.0, "gold": 25.0, "bond": 5.0, "equity": 0.0, "commodity": 30.0, "crypto": 0.0},
-            2: {"cash": 95.0, "gold": 0.0, "bond": 5.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0},
-            3: {"cash": 67.26, "gold": 11.0, "bond": 10.0, "equity": 8.80, "commodity": 2.94, "crypto": 0.0},
-            4: {"cash": 65.0, "gold": 20.0, "bond": 15.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0},
-            5: {"cash": 10.0, "gold": 10.0, "bond": 0.0, "equity": 70.0, "commodity": 0.0, "crypto": 10.0},
         }
+        # Configuration is the single source of truth for named regime allocations.
+        for regime in self.config.get("regimes", []):
+            try:
+                rid = int(regime.get("id"))
+            except (TypeError, ValueError):
+                continue
+            allocation = regime.get("default_allocation")
+            if isinstance(allocation, dict):
+                weights_map[rid] = allocation
         base = self._normalize_weights(weights_map.get(int(regime_id), weights_map[0]))
         if row is None:
-            base.update(oil_event_score=0.0, oil_momentum_score=0.0, oil_structural_score=0.0, oil_event_type="NONE", commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False)
+            base.update(oil_event_score=0.0, oil_momentum_score=0.0, oil_structural_score=0.0, oil_event_type="NONE", oil_event_active=False, commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False, unknown_guard_active=False)
             return base
         return self._apply_event_overlays(base, row, int(regime_id))
 
@@ -873,6 +929,8 @@ class MacroRegimeEngine:
             "crude_inventory_draw_z": self._safe_float(row.get("crude_inventory_draw_z"), np.nan),
             "commodity_breadth_20d": self._safe_float(row.get("commodity_breadth_20d"), np.nan),
             "oil_event_quality_60d": self._safe_float(row.get("oil_event_quality_60d"), 0.5),
+            "tips_level_z": self._safe_float(row.get("tips_level_z"), 0.0),
+            "tips_level_percentile_252": self._safe_float(row.get("tips_level_percentile_252"), 50.0),
             "unknown_event_score": unknown_score,
-            "unknown_event_active": unknown_score > 0.0,
+            "unknown_event_active": unknown_score >= float(self.config.get("event_overlay", {}).get("unknown_event", {}).get("activation_score", 0.25)),
         }
