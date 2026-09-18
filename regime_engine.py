@@ -249,6 +249,21 @@ class MacroRegimeEngine:
             p["vix_z"] = 0.0
             p["vix_percentile_252"] = 50.0
 
+        # Opportunity-state features. These are point-in-time and are consumed
+        # by the bounded production strategy layer.
+        if "spx" in p.columns:
+            spx = pd.to_numeric(p["spx"], errors="coerce")
+            p["spx_ret_20d"] = spx.pct_change(20)
+            p["spx_ret_100d"] = spx.pct_change(100)
+        else:
+            p["spx_ret_20d"] = np.nan
+            p["spx_ret_100d"] = np.nan
+        if "btc" in p.columns:
+            btc_series = pd.to_numeric(p["btc"], errors="coerce")
+            p["btc_ret_60d"] = btc_series.pct_change(60)
+        else:
+            p["btc_ret_60d"] = np.nan
+
         # Risk basket.
         if "btc" in p.columns and "spx" in p.columns:
             basket = (
@@ -582,6 +597,7 @@ class MacroRegimeEngine:
             "unknown_event_score": 0.0,
             "unknown_event_active": False,
             "unknown_guard_active": False,
+            "strategy_mode": "STATIC_REGIME",
         }
         for col, val in defaults.items():
             out[col] = val
@@ -691,7 +707,7 @@ class MacroRegimeEngine:
                 "oil_pressure_score", "oil_event_score", "oil_momentum_score", "oil_structural_score",
                 "oil_structural_qualified", "oil_momentum_confirmed", "oil_event_type", "oil_event_active",
                 "commodity_event_active", "commodity_event_reason", "unknown_event_score",
-                "unknown_event_active", "unknown_guard_active",
+                "unknown_event_active", "unknown_guard_active", "strategy_mode",
             ):
                 out.at[idx, key] = weights.get(key, defaults[key])
 
@@ -892,6 +908,30 @@ class MacroRegimeEngine:
             w["commodity_event_reason"] = f"Confirmed oil event active ({oil_snapshot['event_type']}): score={oil_score:.2f}, commodity allocation={w['commodity']:.2f}%."
         elif oil_snapshot["event_type"] == "PRESSURE_ONLY":
             w["commodity_event_reason"] = f"Oil structural/momentum pressure monitored (pressure={oil_pressure:.2f}); confirmed-event gate not met."
+
+        # Final canonicalization: event state must be self-consistent at the
+        # persistence boundary regardless of any upstream normalization.
+        if oil_snapshot["momentum_confirmed"] and oil_snapshot["structural_confirmed"]:
+            canonical_type = "COMBINED"
+            canonical_score = max(oil_snapshot["momentum_score"], oil_snapshot["structural_score"])
+        elif oil_snapshot["momentum_confirmed"]:
+            canonical_type = "MOMENTUM"
+            canonical_score = oil_snapshot["momentum_score"]
+        elif oil_snapshot["structural_confirmed"]:
+            canonical_type = "STRUCTURAL"
+            canonical_score = oil_snapshot["structural_score"]
+        elif oil_pressure >= float(oil_cfg.get("pressure_display_threshold", 0.20)):
+            canonical_type = "PRESSURE_ONLY"
+            canonical_score = 0.0
+        else:
+            canonical_type = "NONE"
+            canonical_score = 0.0
+        w["oil_pressure_score"] = float(oil_pressure)
+        w["oil_event_score"] = float(canonical_score)
+        w["oil_event_type"] = canonical_type
+        w["oil_event_active"] = bool(canonical_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"})
+        w["oil_structural_qualified"] = bool(oil_snapshot["structural_qualified"])
+        w["oil_momentum_confirmed"] = bool(oil_snapshot["momentum_confirmed"])
         return self._normalize_weights(w)
 
     @staticmethod
@@ -926,7 +966,53 @@ class MacroRegimeEngine:
         if row is None:
             base.update(oil_pressure_score=0.0, oil_event_score=0.0, oil_momentum_score=0.0, oil_structural_score=0.0, oil_structural_qualified=False, oil_momentum_confirmed=False, oil_event_type="NONE", oil_event_active=False, oil_qualification_reason="No live row supplied; regime weights only.", commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False, unknown_guard_active=False)
             return base
+        if bool(self.config.get("research_strategies", {}).get("live_use_adaptive_opportunity", False)):
+            base = self._adaptive_opportunity_weights(base, row, int(regime_id))
         return self._apply_event_overlays(base, row, int(regime_id))
+
+    def _adaptive_opportunity_weights(self, base: Dict[str, Any], row: pd.Series, regime_id: int) -> Dict[str, Any]:
+        """Bounded return-seeking allocation overlay; uses only prior-known row features."""
+        cfg = self.config.get("research_strategies", {})
+        risk_map = cfg.get("production_risk_budget_by_regime", cfg.get("risk_budget_by_regime", {}))
+        risk = float(risk_map.get(str(regime_id), 0.60))
+        sp20 = self._safe_float(row.get("spx_ret_20d"), 0.0)
+        sp100 = self._safe_float(row.get("spx_ret_100d"), 0.0)
+        btc60 = self._safe_float(row.get("btc_ret_60d"), 0.0)
+        vix_pct = self._safe_float(row.get("vix_percentile_252"), 50.0)
+        trend = cfg.get("production_trend_adjustments", cfg.get("trend_adjustments", {}))
+        if sp20 > 0 and sp100 > 0:
+            risk += float(trend.get("positive_20d_and_100d", 0.12))
+        elif sp20 < 0 and sp100 < 0:
+            risk += float(trend.get("negative_20d_and_100d", -0.15))
+        if vix_pct > 80:
+            risk += float(trend.get("vix_pct_above_80", -0.18))
+        elif vix_pct < 30:
+            risk += float(trend.get("vix_pct_below_30", 0.05))
+        btc_cfg = cfg.get("production_btc_adjustments", cfg.get("btc_adjustments", {}))
+        btc_enabled = bool(cfg.get("production_enable_btc", True))
+        if btc_enabled and btc60 > 0:
+            risk += float(btc_cfg.get("positive_60d", 0.06))
+        elif btc_enabled and btc60 < 0:
+            risk += float(btc_cfg.get("negative_60d", -0.04))
+        risk = float(np.clip(risk, 0.08, 0.88))
+        sleeve = cfg.get("production_risk_sleeve_weights", cfg.get("risk_sleeve_weights", {"equity":0.62,"gold":0.14,"commodity":0.10,"bond":0.14,"crypto":0.10}))
+        eq_s = float(sleeve.get("equity",0.62)); gold_s=float(sleeve.get("gold",0.14)); oil_s=float(sleeve.get("commodity",0.10)); bond_s=float(sleeve.get("bond",0.14)); btc_s=float(sleeve.get("crypto",0.10)) if btc_enabled and btc60 > 0 and risk > 0.45 else 0.0
+        bond_s = max(0.0, bond_s - btc_s)
+        eq = risk * eq_s; gold = risk * gold_s; oil = risk * oil_s; bond = risk * bond_s; btc = risk * btc_s
+        cash = max(0.0, 1.0 - (eq + gold + oil + bond + btc))
+        # Preserve the regime's defensive floor even when the opportunity sleeve is active.
+        min_cash = float(cfg.get("production_min_cash_by_regime", {}).get(str(regime_id), 0.0))
+        if cash < min_cash:
+            needed = min_cash - cash
+            donor = ["equity", "commodity", "crypto", "gold"]
+            vals = {"equity":eq, "commodity":oil, "crypto":btc, "gold":gold}
+            for key in donor:
+                take = min(needed, vals[key]); vals[key] -= take; needed -= take
+                if needed <= 1e-9: break
+            eq, oil, btc, gold = vals["equity"], vals["commodity"], vals["crypto"], vals["gold"]
+            cash = min_cash
+        base.update({"cash": cash*100.0, "gold": gold*100.0, "bond": bond*100.0, "equity": eq*100.0, "commodity": oil*100.0, "crypto": btc*100.0, "strategy_mode": "ADAPTIVE_OPPORTUNITY_BTC" if btc_enabled else "ADAPTIVE_OPPORTUNITY"})
+        return self._normalize_weights(base)
 
     def get_event_snapshot(self, row: pd.Series) -> Dict[str, Any]:
         oil = self._oil_event_snapshot(row)

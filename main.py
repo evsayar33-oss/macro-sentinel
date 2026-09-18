@@ -602,6 +602,9 @@ class UltimateSentinelEngine:
             regime_status = "Teyit Edildi"
 
         weights_live = self.regime_engine.get_portfolio_weights(regime_id, regime_subtype, row=latest)
+        # Canonical event snapshot is computed before any emergency override so
+        # all persisted event fields share the same point-in-time source.
+        event_snapshot = self.regime_engine.get_event_snapshot(latest)
         emergency = regime_id == 2 or float(latest.get("vix", np.nan)) > 35.0
         if emergency:
             weights_live = {
@@ -621,10 +624,9 @@ class UltimateSentinelEngine:
         else:
             weights_live = self.regime_engine._normalize_weights(weights_live)
 
-        # Canonicalize the event metadata from a fresh engine snapshot after all
-        # allocation/normalization operations. This prevents a stale or partially
-        # normalized event field from disagreeing with the actual event state.
-        event_snapshot = self.regime_engine.get_event_snapshot(latest)
+        # Re-apply canonical event metadata after all allocation/normalization
+        # operations. This prevents any stale or partially normalized field from
+        # disagreeing with the actual event state.
         weights_live.update({
             "oil_pressure_score": float(event_snapshot.get("oil_pressure_score", 0.0)),
             "oil_event_score": float(event_snapshot.get("oil_event_score", 0.0)),
@@ -800,6 +802,7 @@ class UltimateSentinelEngine:
             "unknown_event_score": float(weights.get("unknown_event_score", 0.0)),
             "unknown_event_active": bool(weights.get("unknown_event_active", False)),
             "unknown_guard_active": bool(weights.get("unknown_guard_active", False)),
+            "strategy_mode": str(weights.get("strategy_mode", "STATIC_REGIME")),
             "oil_event_quality_60d": 0.5,
             "commodity_breadth_20d": 0.0,
             "ml_confidence": 0,
@@ -926,7 +929,43 @@ def _daily_audit(history: pd.DataFrame, current_result: Dict[str, object], min_e
     }
 
 
+def _canonicalize_result_event_state(result: Dict[str, object]) -> Dict[str, object]:
+    """Enforce one canonical oil-event state before history persistence."""
+    out = dict(result)
+    def flag(value):
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    try: momentum = float(out.get("oil_momentum_score", 0.0) or 0.0)
+    except (TypeError, ValueError): momentum = 0.0
+    try: structural = float(out.get("oil_structural_score", 0.0) or 0.0)
+    except (TypeError, ValueError): structural = 0.0
+    try: pressure = float(out.get("oil_pressure_score", max(momentum, structural)) or 0.0)
+    except (TypeError, ValueError): pressure = max(momentum, structural)
+    qualified = flag(out.get("oil_structural_qualified", False))
+    momentum_ok = flag(out.get("oil_momentum_confirmed", False))
+    structural_ok = qualified and structural >= 0.20
+    if momentum_ok and structural_ok:
+        event_type, event_score = "COMBINED", max(momentum, structural)
+    elif momentum_ok:
+        event_type, event_score = "MOMENTUM", momentum
+    elif structural_ok:
+        event_type, event_score = "STRUCTURAL", structural
+    elif pressure >= 0.20:
+        event_type, event_score = "PRESSURE_ONLY", 0.0
+    else:
+        event_type, event_score = "NONE", 0.0
+    out.update({
+        "oil_pressure_score": round(float(np.clip(pressure, 0.0, 1.0)), 6),
+        "oil_event_score": round(float(np.clip(event_score, 0.0, 1.0)), 6),
+        "oil_event_type": event_type,
+        "oil_event_active": bool(event_type in {"MOMENTUM", "STRUCTURAL", "COMBINED"}),
+        "oil_structural_qualified": bool(qualified),
+        "oil_momentum_confirmed": bool(momentum_ok),
+    })
+    return out
+
+
 def append_history(result: Dict[str, object]):
+    result = _canonicalize_result_event_state(result)
     new = pd.DataFrame([result])
     if os.path.exists(HISTORY_FILE):
         try:

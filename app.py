@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Macro Sentinel v2.4",
+    page_title="Macro Sentinel v2.6",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -98,6 +98,8 @@ latest = df.iloc[-1]
 health = text_or(latest, "data_health_status", "UNKNOWN").upper()
 decision = text_or(latest, "decision_status", "UNKNOWN").upper()
 source = text_or(latest, "allocation_source", "UNKNOWN").upper()
+strategy_mode = text_or(latest, "strategy_mode", "STATIC_REGIME")
+event_coverage = text_or(latest, "event_coverage_status", "UNKNOWN").upper()
 issues = text_or(latest, "data_health_issues", "")
 warnings = text_or(latest, "data_health_warnings", "")
 regime_id = int(fnum(latest, "regime_id", 0))
@@ -131,6 +133,8 @@ vix3m = fnum(latest, "vix_term", np.nan)
 
 # Health semantics: optional missing data should not visually imply that the
 # current decision is invalid when no critical issue blocked the engine.
+st.caption(f"Strateji profili: **{strategy_mode}** · Olay kapsamı: **{event_coverage}**")
+
 if health == "HALT":
     health_label = "🔴 HALT"
     decision_health = "BLOCKED"
@@ -214,8 +218,8 @@ oil_col, structural_col, unknown_col, breadth_col, quality_col = st.columns(5)
 with oil_col:
     st.metric("Petrol Event", "AKTİF" if oil_active else "PASİF", delta=f"Event {oil_score:.2f} · Baskı {oil_pressure:.2f}")
 with structural_col:
-    display_type = "YAPISAL BASKI" if oil_event_type == "PRESSURE_ONLY" else oil_event_type
-    st.metric("Olay Durumu", display_type, help="PRESSURE_ONLY = baskı var fakat doğrulanmış event eşiği geçilmedi. STRUCTURAL = yapısal event doğrulandı. MOMENTUM = kısa vadeli şok. COMBINED = ikisi.")
+    display_type = {"PRESSURE_ONLY": "YAPISAL BASKI", "NONE": "YOK", "STRUCTURAL": "YAPISAL EVENT", "MOMENTUM": "MOMENTUM EVENT", "COMBINED": "BİRLEŞİK EVENT"}.get(oil_event_type, oil_event_type)
+    st.metric("Olay Durumu", display_type, help="YAPISAL BASKI = pressure var fakat teyit yok. YAPISAL EVENT = yapısal teyit var. MOMENTUM EVENT = kısa vadeli teyit var. BİRLEŞİK EVENT = ikisi de teyitli.")
 with unknown_col:
     st.metric("Unknown Anomaly", "AKTİF" if unknown_active else "PASİF", delta=f"Skor {unknown_score:.2f}")
 with breadth_col:
@@ -256,6 +260,14 @@ if unknown_active:
         f"⚠️ Tanımlanmamış anomali sensörü aktif (skor {unknown_score:.2f}). "
         "Sistem yön tahmini uydurmak yerine risk azaltıcı guard uygulayabilir."
     )
+
+hc1, hc2, hc3 = st.columns(3)
+with hc1:
+    st.metric("Core Veri", "SAĞLAM" if health == "HEALTHY" else health)
+with hc2:
+    st.metric("Event Kapsamı", event_coverage)
+with hc3:
+    st.metric("Strateji", strategy_mode)
 
 st.subheader("⚖️ Mevcut Allocation")
 alloc_html = '<div class="allocation-row">'

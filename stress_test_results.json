@@ -1,17 +1,17 @@
 {
   "monte_carlo_10k": {
     "🏛️ Macro Sentinel Multi-Asset": {
-      "Median 1Y Return": 0.33,
-      "5th Percentile": -10.59,
-      "95th Percentile": 12.49,
-      "VaR 95% (1Y)": 10.59,
-      "VaR 99% (1Y)": 15.53,
-      "CVaR 95% (ES)": 13.63,
-      "CVaR 99% (ES)": 17.7,
-      "Ortalama Max DD": 6.62,
-      "99% Worst Max DD": 17.77,
-      "P(DD > 10%)": "%16.3",
-      "P(DD > 20%)": "%0.3"
+      "Median 1Y Return": 6.69,
+      "5th Percentile": -6.87,
+      "95th Percentile": 21.46,
+      "VaR 95% (1Y)": 6.87,
+      "VaR 99% (1Y)": 12.63,
+      "CVaR 95% (ES)": 10.31,
+      "CVaR 99% (ES)": 15.28,
+      "Ortalama Max DD": 6.55,
+      "99% Worst Max DD": 17.11,
+      "P(DD > 10%)": "%13.1",
+      "P(DD > 20%)": "%0.2"
     },
     "🛡️ Defensive Shield": {
       "Median 1Y Return": 0.56,
