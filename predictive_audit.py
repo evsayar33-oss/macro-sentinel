@@ -1,9 +1,11 @@
 """
 Macro Sentinel V3.1 — daily predictive audit persistence.
 
-Reads cms_history.csv, evaluates only matured historical outcomes, and writes
-predictive diagnostics onto the current last row. It never changes today's
-allocation and never feeds future outcomes backward into a past decision.
+Reads cms_history.csv, canonicalizes intraday history to one observation per
+calendar day inside the predictive engine, evaluates only matured 5/20 trading-
+day outcomes, and writes predictive diagnostics onto the current last raw row.
+It never changes today's allocation and never feeds future outcomes backward
+into a past decision.
 """
 from __future__ import annotations
 
@@ -23,11 +25,15 @@ CONFIG_FILE = "regime_config.json"
 def _load_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_FILE):
         return {}
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        print(f"predictive_audit=config_error={str(exc)[:160]}")
+        return {}
 
 
-def _num(v, default=np.nan):
+def _num(v: Any, default=np.nan) -> float:
     try:
         x = float(v)
         return x if np.isfinite(x) else default
@@ -39,7 +45,13 @@ def run_audit() -> Dict[str, Any]:
     if not os.path.exists(HISTORY_FILE):
         print("predictive_audit=WARMUP reason=cms_history.csv not found")
         return {"status": "NO_HISTORY"}
-    df = pd.read_csv(HISTORY_FILE)
+
+    try:
+        df = pd.read_csv(HISTORY_FILE)
+    except Exception as exc:
+        print(f"predictive_audit=WARMUP reason=history_read_error:{str(exc)[:160]}")
+        return {"status": "NO_HISTORY"}
+
     if df.empty:
         print("predictive_audit=WARMUP reason=empty history")
         return {"status": "NO_HISTORY"}
@@ -48,7 +60,17 @@ def run_audit() -> Dict[str, Any]:
     latest = df.iloc[-1]
     risk_score = _num(latest.get("strategy_stress_score"), 0.5)
     opp_score = _num(latest.get("strategy_opportunity_score"), 0.5)
-    estimate = predictor.evaluate(df.iloc[:-1].copy(), risk_score, opp_score, current_timestamp=latest.get("date"))
+    current_timestamp = latest.get("date")
+
+    # Exclude the current raw row from training/forward-outcome history. The
+    # engine then collapses any earlier intraday rows into one daily observation.
+    past = df.iloc[:-1].copy()
+    estimate = predictor.evaluate(
+        past,
+        risk_score,
+        opp_score,
+        current_timestamp=current_timestamp,
+    )
 
     fields = {
         "predictive_status": estimate.status,
@@ -65,8 +87,8 @@ def run_audit() -> Dict[str, Any]:
         "predictive_audit_reason": str(estimate.reason),
     }
 
-    # Rebuild the dataframe instead of scalar assignment. This avoids pandas
-    # dtype-upcast failures with boolean/numeric legacy columns.
+    # Rebuild instead of scalar assignment. This avoids pandas dtype-upcast
+    # problems in legacy CSV columns containing booleans, ints and floats.
     rows = df.to_dict(orient="records")
     rows[-1].update(fields)
     out = pd.DataFrame(rows)
