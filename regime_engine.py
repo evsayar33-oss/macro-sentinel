@@ -1,198 +1,241 @@
 """
-Macro Regime Engine - Deterministic Macro Event Interpretation System v1.0
-Principles:
-1. Mutual Exclusivity (Exactly 1 active regime)
-2. 52-week Rolling Z-Scores normalization
-3. 2-Week Hysteresis confirmation memory
-4. Deterministic scoring and explicit conflict resolution
-5. Structural macro level awareness (Real rates, Oil trend, Freight disruption, Net Liquidity)
+Macro Sentinel Regime Engine v2.0
+
+Design goals
+------------
+* Point-in-time / no-lookahead calculations.
+* Deterministic regime classification with bounded hysteresis.
+* Independent event layer for commodity/oil shocks and unknown anomalies.
+* Dynamic, distribution-aware event thresholds without unbounded self-optimization.
+* Portfolio weights always normalize to exactly 100%.
+* Data-quality failures never manufacture market data.
 """
 
-import os
 import json
+import os
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple
 
 
 class MacroRegimeEngine:
     def __init__(self, config_path: str = "regime_config.json"):
         self.config_path = config_path
         self.config = self.load_config()
-        self.hysteresis_weeks = self.config.get("system_architecture", {}).get("principles", {}).get("hysteresis_confirmation_period_weeks", 2)
-        self.hysteresis_days = self.hysteresis_weeks * 5  # 10 business days
+        principles = self.config.get("system_architecture", {}).get("principles", {})
+        self.hysteresis_weeks = int(principles.get("hysteresis_confirmation_period_weeks", 2))
+        self.hysteresis_days = max(1, self.hysteresis_weeks * 5)
+        self.minimum_history = int(principles.get("minimum_history_days", 126))
 
     def load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return {}
 
     @staticmethod
-    def calc_rolling_z(series: pd.Series, window: int = 252) -> pd.Series:
-        r_mean = series.rolling(window=window, min_periods=max(20, window // 4)).mean()
-        r_std = series.rolling(window=window, min_periods=max(20, window // 4)).std()
-        return (series - r_mean) / (r_std + 1e-6)
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            x = float(value)
+            return x if np.isfinite(x) else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def calc_rolling_z(series: pd.Series, window: int = 252, min_periods: Optional[int] = None) -> pd.Series:
+        s = pd.to_numeric(series, errors="coerce")
+        if min_periods is None:
+            min_periods = max(40, window // 4)
+        mean = s.rolling(window=window, min_periods=min_periods).mean()
+        std = s.rolling(window=window, min_periods=min_periods).std()
+        return (s - mean) / (std.replace(0.0, np.nan) + 1e-9)
 
     @staticmethod
     def calc_rolling_slope(series: pd.Series, window: int = 10) -> pd.Series:
-        def _slope(y):
+        s = pd.to_numeric(series, errors="coerce")
+
+        def _slope(y: np.ndarray) -> float:
             if len(y) < window or np.isnan(y).any():
-                return 0.0
-            x = np.arange(len(y))
+                return np.nan
+            x = np.arange(len(y), dtype=float)
             x_m = x.mean()
             y_m = y.mean()
             denom = np.sum((x - x_m) ** 2)
-            if denom == 0:
-                return 0.0
-            return np.sum((x - x_m) * (y - y_m)) / denom
+            if denom <= 0:
+                return np.nan
+            return float(np.sum((x - x_m) * (y - y_m)) / denom)
 
-        return series.rolling(window=window, min_periods=window).apply(_slope, raw=True)
+        return s.rolling(window=window, min_periods=window).apply(_slope, raw=True)
 
     @staticmethod
-    def calc_rolling_percentile(series: pd.Series, window: int = 252) -> pd.Series:
-        def _pct(x):
-            if len(x) < 2 or np.isnan(x).any():
-                return 50.0
-            cur = x[-1]
-            return float(np.sum(x <= cur) / len(x) * 100.0)
+    def calc_rolling_percentile(series: pd.Series, window: int = 252, min_periods: Optional[int] = None) -> pd.Series:
+        s = pd.to_numeric(series, errors="coerce")
+        if min_periods is None:
+            min_periods = max(40, window // 4)
 
-        return series.rolling(window=window, min_periods=max(20, window // 4)).apply(_pct, raw=True)
+        def _pct(x: np.ndarray) -> float:
+            clean = x[np.isfinite(x)]
+            if len(clean) < 2:
+                return np.nan
+            return float(np.mean(clean <= clean[-1]) * 100.0)
+
+        return s.rolling(window=window, min_periods=min_periods).apply(_pct, raw=True)
 
     def prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        p = df.copy()
+        """Build all point-in-time indicators. No future observations are used."""
+        p = df.copy().sort_index()
 
-        # 1. Oil / Commodity Shock
-        # Keep the oil sensor independent from the growth proxy.  Oil is an
-        # independent macro input and must not be multiplied by an unrelated
-        # equity-growth direction signal.
-        if 'oil' in p.columns:
-            oil_ret_5d = p['oil'].pct_change(5)
-            oil_ret_20d = p['oil'].pct_change(20)
-            oil_daily_vol_60d = p['oil'].pct_change().rolling(60, min_periods=20).std()
+        # Oil / commodity event layer.
+        if "oil" in p.columns:
+            oil = pd.to_numeric(p["oil"], errors="coerce")
+            oil_ret_1d = oil.pct_change(1)
+            oil_ret_5d = oil.pct_change(5)
+            oil_ret_20d = oil.pct_change(20)
+            oil_vol_20d = oil_ret_1d.rolling(20, min_periods=10).std()
 
-            p['oil_ret_5d_z'] = self.calc_rolling_z(oil_ret_5d, window=252)
-            p['oil_ret_20d_z'] = self.calc_rolling_z(oil_ret_20d, window=252)
+            p["oil_ret_5d_z"] = self.calc_rolling_z(oil_ret_5d, 252)
+            p["oil_ret_20d_z"] = self.calc_rolling_z(oil_ret_20d, 252)
+            p["oil_vol_20d_z"] = self.calc_rolling_z(oil_vol_20d, 252)
 
-            # Volatility-adjusted 20-day trend strength.  This replaces the
-            # previous growth-dependent sign flip in main.py.
-            p['oil_trend_strength'] = oil_ret_20d / (oil_daily_vol_60d * np.sqrt(20.0) + 1e-6)
-            p['oil_trend'] = p['oil_trend_strength']
-            p['oil_level_z'] = self.calc_rolling_z(p['oil'], window=252)
+            trend_raw = oil_ret_20d / (oil_vol_20d * np.sqrt(20.0) + 1e-9)
+            p["oil_trend_strength"] = self.calc_rolling_z(trend_raw, 252)
+
+            # Adaptive percentile: how unusual is today's absolute 5d move
+            # relative to the prior ~1y distribution? This is point-in-time.
+            abs_5d = oil_ret_5d.abs()
+            p["oil_abs_5d_percentile"] = abs_5d.rolling(252, min_periods=63).apply(
+                lambda x: float(np.mean(x <= x[-1]) * 100.0) if np.isfinite(x[-1]) else np.nan,
+                raw=True,
+            )
         else:
-            p['oil_ret_5d_z'] = 0.0
-            p['oil_ret_20d_z'] = 0.0
-            p['oil_trend_strength'] = 0.0
-            p['oil_trend'] = 0.0
-            p['oil_level_z'] = 0.0
+            for col in ["oil_ret_5d_z", "oil_ret_20d_z", "oil_vol_20d_z", "oil_trend_strength", "oil_abs_5d_percentile"]:
+                p[col] = 0.0
 
-        # Optional commodity breadth: copper + silver.  It is a secondary
-        # confirmation only; oil can trigger the event without requiring it.
-        breadth_parts = []
-        for commodity_col in ('copper', 'silver'):
-            if commodity_col in p.columns:
-                breadth_parts.append(p[commodity_col].pct_change(20) > 0)
-        if breadth_parts:
-            p['commodity_breadth_20d'] = pd.concat(breadth_parts, axis=1).mean(axis=1)
+        # Freight / trade.
+        if "freight" in p.columns:
+            freight = pd.to_numeric(p["freight"], errors="coerce")
+            p["freight_lvl_z"] = self.calc_rolling_z(freight, 252)
+            p["freight_20d_z"] = self.calc_rolling_z(freight.pct_change(20), 252)
         else:
-            p['commodity_breadth_20d'] = 0.0
+            p["freight_lvl_z"] = 0.0
+            p["freight_20d_z"] = 0.0
 
-        # 2. Freight / Trade Shock
-        if 'freight' in p.columns:
-            p['freight_lvl_z'] = self.calc_rolling_z(p['freight'], window=252)
+        # Credit spreads.
+        if "hy_oas" in p.columns:
+            hy = pd.to_numeric(p["hy_oas"], errors="coerce")
+            p["hy_oas_z"] = self.calc_rolling_z(hy, 252)
+            p["hy_oas_slope_10d"] = self.calc_rolling_slope(hy, 10)
         else:
-            p['freight_lvl_z'] = 0.0
+            p["hy_oas_z"] = 0.0
+            p["hy_oas_slope_10d"] = 0.0
 
-        # 3. Credit Spreads
-        if 'hy_oas' in p.columns:
-            p['hy_oas_z'] = self.calc_rolling_z(p['hy_oas'], window=252)
-            p['hy_oas_slope_10d'] = self.calc_rolling_slope(p['hy_oas'], window=10)
+        if "ig_oas" in p.columns:
+            p["ig_oas_z"] = self.calc_rolling_z(pd.to_numeric(p["ig_oas"], errors="coerce"), 252)
         else:
-            p['hy_oas_z'] = 0.0
-            p['hy_oas_slope_10d'] = 0.0
+            p["ig_oas_z"] = 0.0
 
-        if 'ig_oas' in p.columns:
-            p['ig_oas_z'] = self.calc_rolling_z(p['ig_oas'], window=252)
+        # Stock/bond correlation; contemporaneous historical returns only.
+        if "spx" in p.columns and "ust10y" in p.columns:
+            spx_ret = pd.to_numeric(p["spx"], errors="coerce").pct_change()
+            yield_diff = pd.to_numeric(p["ust10y"], errors="coerce").diff()
+            bond_proxy_ret = -8.0 * yield_diff / 100.0
+            p["spx_bond_corr_60d"] = spx_ret.rolling(60, min_periods=30).corr(bond_proxy_ret)
         else:
-            p['ig_oas_z'] = 0.0
+            p["spx_bond_corr_60d"] = 0.0
 
-        # 4. Stock-Bond Correlation
-        if 'spx' in df.columns and 'ust10y' in df.columns:
-            spx_ret = p['spx'].pct_change()
-            ust10y_diff = p['ust10y'].diff()
-            bond_ret = -8.0 * ust10y_diff / 100.0
-            p['spx_bond_corr_60d'] = spx_ret.rolling(60, min_periods=30).corr(bond_ret)
+        # Dollar / carry.
+        if "broad_dollar" in p.columns:
+            dxy = pd.to_numeric(p["broad_dollar"], errors="coerce")
+            p["broad_dollar_5d_z"] = self.calc_rolling_z(dxy.pct_change(5), 252)
+            p["broad_dollar_z"] = self.calc_rolling_z(dxy, 252)
         else:
-            p['spx_bond_corr_60d'] = 0.0
+            p["broad_dollar_5d_z"] = 0.0
+            p["broad_dollar_z"] = 0.0
 
-        # 5. Dollar & JPY Carry
-        if 'broad_dollar' in p.columns:
-            dxy_5d = p['broad_dollar'].pct_change(5)
-            p['broad_dollar_5d_z'] = self.calc_rolling_z(dxy_5d, window=252)
-            p['broad_dollar_z'] = self.calc_rolling_z(p['broad_dollar'], window=252)
+        if "usdjpy" in p.columns:
+            usdjpy = pd.to_numeric(p["usdjpy"], errors="coerce")
+            p["usdjpy_1d_z"] = self.calc_rolling_z(usdjpy.pct_change(1), 252)
         else:
-            p['broad_dollar_5d_z'] = 0.0
-            p['broad_dollar_z'] = 0.0
+            p["usdjpy_1d_z"] = 0.0
 
-        if 'usdjpy' in p.columns:
-            usdjpy_1d = p['usdjpy'].pct_change(1)
-            p['usdjpy_1d_z'] = self.calc_rolling_z(usdjpy_1d, window=252)
+        # Volatility.
+        if "vix" in p.columns:
+            vix = pd.to_numeric(p["vix"], errors="coerce")
+            p["vix_z"] = self.calc_rolling_z(vix, 252)
+            p["vix_percentile_252"] = self.calc_rolling_percentile(vix, 252)
         else:
-            p['usdjpy_1d_z'] = 0.0
+            p["vix_z"] = 0.0
+            p["vix_percentile_252"] = 50.0
 
-        # 6. Volatility
-        if 'vix' in p.columns:
-            p['vix_z'] = self.calc_rolling_z(p['vix'], window=252)
-            p['vix_percentile_252'] = self.calc_rolling_percentile(p['vix'], window=252)
+        # Risk basket.
+        if "btc" in p.columns and "spx" in p.columns:
+            basket = (
+                0.5 * pd.to_numeric(p["btc"], errors="coerce").pct_change(5)
+                + 0.5 * pd.to_numeric(p["spx"], errors="coerce").pct_change(5)
+            )
+            p["risk_basket_5d_z"] = self.calc_rolling_z(basket, 252)
         else:
-            p['vix_z'] = 0.0
-            p['vix_percentile_252'] = 50.0
+            p["risk_basket_5d_z"] = 0.0
 
-        # 7. Risk Basket (BTC + SPX)
-        if 'btc' in p.columns and 'spx' in p.columns:
-            btc_ret_5d = p['btc'].pct_change(5)
-            spx_ret_5d = p['spx'].pct_change(5)
-            basket_5d = 0.5 * btc_ret_5d + 0.5 * spx_ret_5d
-            p['risk_basket_5d_z'] = self.calc_rolling_z(basket_5d, window=252)
+        # Real rates / breakeven / curve.
+        if "tips10y" in p.columns:
+            tips = pd.to_numeric(p["tips10y"], errors="coerce")
+            p["tips_1d_z"] = self.calc_rolling_z(tips.diff(1), 252)
         else:
-            p['risk_basket_5d_z'] = 0.0
+            p["tips_1d_z"] = 0.0
 
-        # 8. Real Rates & Yield Curve
-        if 'tips10y' in p.columns:
-            tips_1d = p['tips10y'].diff(1)
-            p['tips_1d_z'] = self.calc_rolling_z(tips_1d, window=252)
+        if "t10yie" in p.columns:
+            p["t10yie_z"] = self.calc_rolling_z(pd.to_numeric(p["t10yie"], errors="coerce"), 252)
         else:
-            p['tips_1d_z'] = 0.0
+            p["t10yie_z"] = 0.0
 
-        if 't10yie' in p.columns:
-            p['t10yie_z'] = self.calc_rolling_z(p['t10yie'], window=252)
+        if "dgs2" in p.columns and "dgs10" in p.columns:
+            p["delta_dgs2_5d"] = pd.to_numeric(p["dgs2"], errors="coerce").diff(5)
+            p["delta_dgs10_5d"] = pd.to_numeric(p["dgs10"], errors="coerce").diff(5)
         else:
-            p['t10yie_z'] = 0.0
+            p["delta_dgs2_5d"] = 0.0
+            p["delta_dgs10_5d"] = 0.0
 
-        if 'dgs2' in p.columns and 'dgs10' in p.columns:
-            p['delta_dgs2_5d'] = p['dgs2'].diff(5)
-            p['delta_dgs10_5d'] = p['dgs10'].diff(5)
+        # Net dollar liquidity.
+        if "ndl" in p.columns:
+            p["ndl_z"] = self.calc_rolling_z(pd.to_numeric(p["ndl"], errors="coerce"), 252)
         else:
-            p['delta_dgs2_5d'] = 0.0
-            p['delta_dgs10_5d'] = 0.0
+            p["ndl_z"] = 0.0
 
-        # 9. Net Dollar Liquidity
-        if 'ndl' in p.columns:
-            p['ndl_z'] = self.calc_rolling_z(p['ndl'], window=252)
+        # Gold / industrial-metals breadth.
+        if "gold" in p.columns:
+            gold = pd.to_numeric(p["gold"], errors="coerce")
+            p["gold_rising"] = (gold.rolling(20, min_periods=10).mean() > gold.rolling(50, min_periods=20).mean()) | (gold.pct_change(20) > 0)
+            p["gold_ret_20d"] = gold.pct_change(20)
         else:
-            p['ndl_z'] = 0.0
+            p["gold_rising"] = False
+            p["gold_ret_20d"] = 0.0
 
-        # 10. Gold Price Momentum
-        if 'gold' in p.columns:
-            gold_sma20 = p['gold'].rolling(20, min_periods=5).mean()
-            gold_sma50 = p['gold'].rolling(50, min_periods=10).mean()
-            p['gold_rising'] = (gold_sma20 > gold_sma50) | (p['gold'].pct_change(20) > 0)
+        breadth_inputs = []
+        for asset in ("copper", "silver", "gold"):
+            if asset in p.columns:
+                breadth_inputs.append(pd.to_numeric(p[asset], errors="coerce").pct_change(20) > 0)
+        if breadth_inputs:
+            p["commodity_breadth_20d"] = pd.concat(breadth_inputs, axis=1).mean(axis=1)
         else:
-            p['gold_rising'] = False
+            p["commodity_breadth_20d"] = 0.0
+
+        # Bounded historical event quality. At date t this uses only events
+        # that happened sufficiently far in the past to have a realized 5d move.
+        if "oil" in p.columns:
+            oil5 = pd.to_numeric(p["oil"], errors="coerce").pct_change(5)
+            prior_extreme = (p["oil_ret_5d_z"].shift(5) > 1.0).astype(float)
+            realized_positive = (oil5 > 0).astype(float)
+            valid = prior_extreme.rolling(60, min_periods=10).sum()
+            hit = (prior_extreme * realized_positive).rolling(60, min_periods=10).sum()
+            p["oil_event_quality_60d"] = (hit / valid.replace(0.0, np.nan)).fillna(0.5)
+        else:
+            p["oil_event_quality_60d"] = 0.5
 
         return p
 
-    def evaluate_regimes_for_row(self, row: pd.Series, custom_thresholds: Dict[str, float] = None) -> Dict[int, Dict[str, Any]]:
+    def evaluate_regimes_for_row(self, row: pd.Series, custom_thresholds: Optional[Dict[str, float]] = None) -> Dict[int, Dict[str, Any]]:
         th = {
             "r1_oil_z": 1.4,
             "r1_freight_z": -0.9,
@@ -211,487 +254,449 @@ class MacroRegimeEngine:
             "r5_dxy_min": -2.5,
             "r5_dxy_max": 0.6,
             "r5_vix_pct": 30.0,
-            "r5_ndl_z": 0.0
+            "r5_ndl_z": 0.0,
         }
         if custom_thresholds:
             th.update(custom_thresholds)
 
-        results = {}
+        oil_z = self._safe_float(row.get("oil_ret_20d_z"))
+        oil_trend = self._safe_float(row.get("oil_trend_strength", row.get("oil_trend", 0.0)))
+        freight_z = self._safe_float(row.get("freight_lvl_z"))
+        hy_z = self._safe_float(row.get("hy_oas_z"))
+        corr = self._safe_float(row.get("spx_bond_corr_60d"))
 
-        # ==========================================
-        # Regime 1: Küresel Enflasyon & Stagflasyon Şoku
-        # ==========================================
-        oil_z = float(row.get('oil_ret_20d_z', 0.0))
-        oil_trend = float(row.get('oil_trend_strength', row.get('oil_trend', 0.0)))
-        # Regime-1 classification still requires the broader stagflation
-        # confirmation chain, but oil itself is no longer discarded just
-        # because those secondary conditions are not simultaneously active.
-        r1_t1 = bool((oil_z > th['r1_oil_z']) or (oil_trend >= 2.0))
+        # Regime 1: require independent supply evidence, but the independent
+        # oil event overlay can react even when the full stagflation regime is
+        # not yet confirmed.
+        r1_oil = oil_z > th["r1_oil_z"] or oil_trend >= 2.0
+        r1_freight = freight_z < th["r1_freight_z"] or freight_z > 1.5
+        r1_confirm = hy_z > th["r1_hy_z"] and corr > th["r1_corr"]
+        r1_active = bool(r1_oil and r1_freight and r1_confirm)
 
-        # Navlun / Ticaret Şoku: Hem hacim çöküşü (Z < -0.9) hem de tedarik aksaklığı / maliyet patlaması (Z > 1.5)
-        freight_z = float(row.get('freight_lvl_z', 0.0))
-        r1_t2 = bool((freight_z < th['r1_freight_z']) or (freight_z > 1.5))
+        usdjpy_z = self._safe_float(row.get("usdjpy_1d_z"))
+        dxy5_z = self._safe_float(row.get("broad_dollar_5d_z"))
+        vix_z = self._safe_float(row.get("vix_z"))
+        basket_z = self._safe_float(row.get("risk_basket_5d_z"))
+        r2_trigger = dxy5_z > th["r2_dxy_z"] or usdjpy_z < th["r2_jpy_z"] or vix_z > th["r2_vix_z"]
+        r2_confirm = basket_z < th["r2_basket_z"]
+        r2_active = bool(r2_trigger and r2_confirm)
 
-        r1_trigger = bool(r1_t1 and r1_t2)
-        r1_c1 = bool(row.get('hy_oas_z', 0.0) > th['r1_hy_z'])
-        r1_c2 = bool(row.get('spx_bond_corr_60d', 0.0) > th['r1_corr'])
-        r1_confirm = bool(r1_c1 and r1_c2)
+        tips_chg_z = self._safe_float(row.get("tips_1d_z"))
+        tips_lvl = self._safe_float(row.get("tips10y"), 2.0)
+        t10yie_z = self._safe_float(row.get("t10yie_z"))
+        r3_t1 = tips_chg_z > th["r3_tips_z"] or tips_lvl >= 2.0
+        r3_t2 = t10yie_z < th["r3_t10yie_z"]
+        r3_active = bool(r3_t1 and r3_t2)
 
-        results[1] = {
-            "id": 1,
-            "name": "Küresel Enflasyon & Stagflasyon Şoku",
-            "type": "SHOCK",
-            "trigger_met": r1_trigger,
-            "confirm_met": r1_confirm,
-            "active": bool(r1_trigger and r1_confirm),
-            "main_trigger_z": max(oil_z, oil_trend, abs(freight_z)),
-            "subtype": "Arz Yönlü Stagflasyon (Petrol & Tedarik Kısıtı)",
-            "diagnostics": {"oil_z": oil_z, "oil_trend": oil_trend, "freight_z": freight_z, "hy_oas_z": row.get('hy_oas_z', 0.0), "corr": row.get('spx_bond_corr_60d', 0.0)}
-        }
-
-        # ==========================================
-        # Regime 2: Sistemik Likidite Şoku & Carry Çöküşü
-        # ==========================================
-        dxy_5d_z = float(row.get('broad_dollar_5d_z', 0.0))
-        usdjpy_1d_z = float(row.get('usdjpy_1d_z', 0.0))
-        vix_z = float(row.get('vix_z', 0.0))
-
-        r2_t1 = bool(dxy_5d_z > th['r2_dxy_z'])
-        r2_t2 = bool(usdjpy_1d_z < th['r2_jpy_z'])
-        r2_t3 = bool(vix_z > th['r2_vix_z'])
-        r2_trigger = bool(r2_t1 or r2_t2 or r2_t3)
-
-        basket_z = float(row.get('risk_basket_5d_z', 0.0))
-        r2_confirm = bool(basket_z < th['r2_basket_z'])
-
-        results[2] = {
-            "id": 2,
-            "name": "Sistemik Likidite Şoku & Carry Çöküşü",
-            "type": "SHOCK",
-            "trigger_met": r2_trigger,
-            "confirm_met": r2_confirm,
-            "active": bool(r2_trigger and r2_confirm),
-            "main_trigger_z": max(abs(dxy_5d_z), abs(usdjpy_1d_z), abs(vix_z)),
-            "subtype": "Sistemik Likidite Sıkışması",
-            "diagnostics": {"dxy_5d_z": dxy_5d_z, "usdjpy_1d_z": usdjpy_1d_z, "vix_z": vix_z, "basket_z": basket_z}
-        }
-
-        # ==========================================
-        # Regime 3: Reel Faiz Şoku
-        # ==========================================
-        tips_chg_z = float(row.get('tips_1d_z', 0.0))
-        tips_lvl = float(row.get('tips10y', row.get('real_rate', 2.0)))
-        # Reel faiz şoku: Günlük değişim Z > 1.4 VEYA Yapısal kısıtlayıcı yüksek reel faiz (TIPS >= %2.0)
-        r3_t1 = bool((tips_chg_z > th['r3_tips_z']) or (tips_lvl >= 2.0))
-        t10yie_z = float(row.get('t10yie_z', 0.0))
-        r3_t2 = bool(t10yie_z < th['r3_t10yie_z'])
-        r3_trigger = bool(r3_t1 and r3_t2)
-
-        # Yield curve subtype
-        d_2y = float(row.get('delta_dgs2_5d', 0.0))
-        d_10y = float(row.get('delta_dgs10_5d', 0.0))
-        if d_2y < 0 and d_10y > 0:
+        d2 = self._safe_float(row.get("delta_dgs2_5d"))
+        d10 = self._safe_float(row.get("delta_dgs10_5d"))
+        if d2 < 0 and d10 > 0:
             subtype_r3 = "Bear Steepener (Enflasyon/Term Premium)"
-        elif d_2y > 0 and d_10y > 0 and d_10y > d_2y:
+        elif d2 > 0 and d10 > 0 and d10 > d2:
             subtype_r3 = "Bear Steepener (Fed Varyantı)"
-        elif d_2y > 0 and d_10y > 0 and d_2y > d_10y:
+        elif d2 > 0 and d10 > 0 and d2 > d10:
             subtype_r3 = "Bear Flattener (Fed Sıkılaştırma Baskın)"
-        elif d_2y < 0 and d_10y < 0:
+        elif d2 < 0 and d10 < 0:
             subtype_r3 = "Bull Flattener/Steepener (Gevşeme - Tetiklemez)"
-            r3_trigger = False
+            r3_active = False
         else:
-            subtype_r3 = "Kısıtlayıcı Reel Faiz Baskısı (%2.0+ TIPS)"
+            subtype_r3 = "Kısıtlayıcı Reel Faiz Baskısı"
 
-        results[3] = {
-            "id": 3,
-            "name": "Reel Faiz Şoku",
-            "type": "SHOCK",
-            "trigger_met": r3_trigger,
-            "confirm_met": True,
-            "active": bool(r3_trigger),
-            "main_trigger_z": max(tips_chg_z, (tips_lvl - 1.5) * 2.0),
-            "subtype": subtype_r3,
-            "diagnostics": {"tips_chg_z": tips_chg_z, "tips_lvl": tips_lvl, "t10yie_z": t10yie_z, "d_2y": d_2y, "d_10y": d_10y}
+        hy_slope = self._safe_float(row.get("hy_oas_slope_10d"))
+        ig_z = self._safe_float(row.get("ig_oas_z"))
+        r4_trigger = hy_z > th["r4_hy_z"] and hy_slope > th["r4_slope"]
+        r4_confirm = ig_z > th["r4_ig_z"]
+        r4_active = bool(r4_trigger and r4_confirm)
+
+        dxy_z = self._safe_float(row.get("broad_dollar_z"))
+        vix_pct = self._safe_float(row.get("vix_percentile_252"), 50.0)
+        ndl_z = self._safe_float(row.get("ndl_z"))
+        gold_rising = bool(row.get("gold_rising", False))
+        r5_active = bool(
+            hy_z < th["r5_hy_z"]
+            and th["r5_dxy_min"] <= dxy_z <= th["r5_dxy_max"]
+            and vix_pct < th["r5_vix_pct"]
+            and ndl_z > th["r5_ndl_z"]
+            and tips_lvl < 2.0
+        )
+        subtype_r5 = (
+            "Reflasyonist Risk-On (Zayıf Dolar & Yükselen Emtia)"
+            if dxy_z <= 0.5 and gold_rising
+            else "Klasik Goldilocks Risk-On"
+            if dxy_z <= 0.5
+            else "Geniş Tabanlı Likidite Boğası"
+        )
+
+        return {
+            1: {
+                "id": 1,
+                "name": "Küresel Enflasyon & Stagflasyon Şoku",
+                "type": "SHOCK",
+                "trigger_met": bool(r1_oil and r1_freight),
+                "confirm_met": bool(r1_confirm),
+                "active": r1_active,
+                "main_trigger_z": max(oil_z, oil_trend, abs(freight_z)),
+                "subtype": "Arz Yönlü Stagflasyon (Petrol & Tedarik Kısıtı)",
+                "diagnostics": {"oil_z": oil_z, "oil_trend": oil_trend, "freight_z": freight_z, "hy_oas_z": hy_z, "corr": corr},
+            },
+            2: {
+                "id": 2,
+                "name": "Sistemik Likidite Şoku & Carry Çöküşü",
+                "type": "SHOCK",
+                "trigger_met": bool(r2_trigger),
+                "confirm_met": bool(r2_confirm),
+                "active": r2_active,
+                "main_trigger_z": max(abs(dxy5_z), abs(usdjpy_z), abs(vix_z)),
+                "subtype": "Sistemik Likidite Sıkışması",
+                "diagnostics": {"dxy_5d_z": dxy5_z, "usdjpy_1d_z": usdjpy_z, "vix_z": vix_z, "basket_z": basket_z},
+            },
+            3: {
+                "id": 3,
+                "name": "Reel Faiz Şoku",
+                "type": "SHOCK",
+                "trigger_met": bool(r3_t1 and r3_t2),
+                "confirm_met": True,
+                "active": r3_active,
+                "main_trigger_z": max(tips_chg_z, (tips_lvl - 1.5) * 2.0),
+                "subtype": subtype_r3,
+                "diagnostics": {"tips_chg_z": tips_chg_z, "tips_lvl": tips_lvl, "t10yie_z": t10yie_z, "d2": d2, "d10": d10},
+            },
+            4: {
+                "id": 4,
+                "name": "Kredi Temerrüt Baskısı",
+                "type": "SHOCK",
+                "trigger_met": bool(r4_trigger),
+                "confirm_met": bool(r4_confirm),
+                "active": r4_active,
+                "main_trigger_z": abs(hy_z),
+                "subtype": "Kredi Yayılması & Temerrüt Riski",
+                "diagnostics": {"hy_z": hy_z, "hy_slope": hy_slope, "ig_z": ig_z},
+            },
+            5: {
+                "id": 5,
+                "name": "Küresel Likidite Rallisi (Risk-On)",
+                "type": "RISK_ON",
+                "trigger_met": r5_active,
+                "confirm_met": True,
+                "active": r5_active,
+                "main_trigger_z": ndl_z,
+                "subtype": subtype_r5,
+                "diagnostics": {"hy_oas_z": hy_z, "dxy_z": dxy_z, "vix_pct": vix_pct, "ndl_z": ndl_z, "tips_lvl": tips_lvl},
+            },
         }
-
-        # ==========================================
-        # Regime 4: Kredi Temerrüt Baskısı
-        # ==========================================
-        hy_z = float(row.get('hy_oas_z', 0.0))
-        hy_slope = float(row.get('hy_oas_slope_10d', 0.0))
-        r4_t1 = bool(hy_z > th['r4_hy_z'])
-        r4_t2 = bool(hy_slope > th['r4_slope'])
-        r4_trigger = bool(r4_t1 and r4_t2)
-
-        ig_z = float(row.get('ig_oas_z', 0.0))
-        r4_confirm = bool(ig_z > th['r4_ig_z'])
-
-        results[4] = {
-            "id": 4,
-            "name": "Kredi Temerrüt Baskısı",
-            "type": "SHOCK",
-            "trigger_met": r4_trigger,
-            "confirm_met": r4_confirm,
-            "active": bool(r4_trigger and r4_confirm),
-            "main_trigger_z": abs(hy_z),
-            "subtype": "Kredi Yayılması & Temerrüt Riski",
-            "diagnostics": {"hy_z": hy_z, "hy_slope": hy_slope, "ig_z": ig_z}
-        }
-
-        # ==========================================
-        # Regime 5: Küresel Likidite Rallisi (Risk-On)
-        # ==========================================
-        # Risk-On şartları:
-        # 1. Kredi Gücü (HY OAS daralmış)
-        r5_t1 = bool(row.get('hy_oas_z', 0.0) < th['r5_hy_z'])
-        # 2. Dolar Rejimi (Stabil / Zayıf Dolar)
-        dxy_z = float(row.get('broad_dollar_z', 0.0))
-        r5_t2 = bool(th['r5_dxy_min'] <= dxy_z <= th['r5_dxy_max'])
-        # 3. Volatilite (Düşük VIX)
-        vix_pct = float(row.get('vix_percentile_252', 50.0))
-        r5_t3 = bool(vix_pct < th['r5_vix_pct'])
-        # 4. Net Dolar Likiditesi: Kesinlikle pozitif olmalıdır (Z > 0)! Fed QT varken Likidite Rallisi olamaz!
-        ndl_z = float(row.get('ndl_z', 0.0))
-        r5_t4 = bool(ndl_z > th['r5_ndl_z'])
-        # 5. Reel Faiz Kontrolü: TIPS reel faizi %2.0'nin üzerindeyse likidite rallisi bloke edilir!
-        r5_t5 = bool(tips_lvl < 2.0)
-
-        r5_trigger = bool(r5_t1 and r5_t2 and r5_t3 and r5_t4 and r5_t5)
-
-        gold_rising = bool(row.get('gold_rising', False))
-        if dxy_z <= 0.5 and gold_rising:
-            subtype_r5 = "Reflasyonist Risk-On (Zayıf Dolar & Yükselen Emtia)"
-        elif dxy_z <= 0.5 and not gold_rising:
-            subtype_r5 = "Klasik Goldilocks Risk-On (Dezenflasyonist Büyüme)"
-        else:
-            subtype_r5 = "Geniş Tabanlı Likidite Boğası"
-
-        results[5] = {
-            "id": 5,
-            "name": "Küresel Likidite Rallisi (Risk-On)",
-            "type": "RISK_ON",
-            "trigger_met": r5_trigger,
-            "confirm_met": True,
-            "active": bool(r5_trigger),
-            "main_trigger_z": ndl_z,
-            "subtype": subtype_r5,
-            "diagnostics": {"hy_oas_z": row.get('hy_oas_z', 0.0), "broad_dollar_z": dxy_z, "vix_percentile_252": vix_pct, "ndl_z": ndl_z, "tips_lvl": tips_lvl, "gold_rising": gold_rising}
-        }
-
-        return results
 
     def resolve_conflicts(self, regime_evals: Dict[int, Dict[str, Any]], row: pd.Series) -> Dict[str, Any]:
-        active_shocks = [r for r_id, r in regime_evals.items() if r_id in [1, 2, 3, 4] and r['active']]
-        active_riskon = [r for r_id, r in regime_evals.items() if r_id == 5 and r['active']]
-
-        # Special conflict case: Regime 1 vs Regime 3
-        r1_active = regime_evals[1]['active']
-        r3_active = regime_evals[3]['active']
-        if r1_active and r3_active:
-            t10yie_z = float(row.get('t10yie_z', 0.0))
-            if t10yie_z > 0.5:
-                selected = regime_evals[1]
-                note = "Special Conflict R1 vs R3: T10YIE_Z > 0.5 -> Regime 1 (Stagflation) prioritized"
-            else:
-                selected = regime_evals[3]
-                note = "Special Conflict R1 vs R3: T10YIE_Z <= 0.5 -> Regime 3 (Real Rates) prioritized"
-            return {
-                "candidate_id": selected['id'],
-                "candidate_name": selected['name'],
-                "candidate_type": selected['type'],
-                "candidate_subtype": selected['subtype'],
-                "main_trigger_z": selected['main_trigger_z'],
-                "conflict_note": note,
-                "all_triggered": [r['id'] for r in active_shocks]
-            }
-
-        # Rule 1: Priority Category (SHOCK > RISK_ON)
+        active_shocks = [r for rid, r in regime_evals.items() if rid in (1, 2, 3, 4) and r["active"]]
         if active_shocks:
-            selected = max(active_shocks, key=lambda x: abs(float(x.get('main_trigger_z', 0.0))))
-            note = f"Multiple shocks resolved by max |Z|: Regime {selected['id']}" if len(active_shocks) > 1 else f"Shock Regime {selected['id']} active"
+            r1 = regime_evals[1]["active"]
+            r3 = regime_evals[3]["active"]
+            if r1 and r3:
+                t10yie_z = self._safe_float(row.get("t10yie_z"))
+                selected = regime_evals[1] if t10yie_z > 0.5 else regime_evals[3]
+                return {
+                    "candidate_id": selected["id"],
+                    "candidate_name": selected["name"],
+                    "candidate_type": selected["type"],
+                    "candidate_subtype": selected["subtype"],
+                    "main_trigger_z": selected["main_trigger_z"],
+                    "conflict_note": "R1/R3 conflict resolved by breakeven-inflation state.",
+                    "all_triggered": [r["id"] for r in active_shocks],
+                }
+            selected = max(active_shocks, key=lambda x: abs(self._safe_float(x.get("main_trigger_z"))))
             return {
-                "candidate_id": selected['id'],
-                "candidate_name": selected['name'],
-                "candidate_type": selected['type'],
-                "candidate_subtype": selected['subtype'],
-                "main_trigger_z": selected['main_trigger_z'],
-                "conflict_note": note,
-                "all_triggered": [r['id'] for r in active_shocks]
+                "candidate_id": selected["id"],
+                "candidate_name": selected["name"],
+                "candidate_type": selected["type"],
+                "candidate_subtype": selected["subtype"],
+                "main_trigger_z": selected["main_trigger_z"],
+                "conflict_note": f"Multiple shocks resolved by highest absolute trigger magnitude: R{selected['id']}.",
+                "all_triggered": [r["id"] for r in active_shocks],
             }
 
-        if active_riskon:
-            selected = active_riskon[0]
+        if regime_evals[5]["active"]:
+            r = regime_evals[5]
             return {
-                "candidate_id": selected['id'],
-                "candidate_name": selected['name'],
-                "candidate_type": selected['type'],
-                "candidate_subtype": selected['subtype'],
-                "main_trigger_z": selected['main_trigger_z'],
-                "conflict_note": "Risk-On Triggered (No Shock Active)",
-                "all_triggered": [5]
+                "candidate_id": 5,
+                "candidate_name": r["name"],
+                "candidate_type": r["type"],
+                "candidate_subtype": r["subtype"],
+                "main_trigger_z": r["main_trigger_z"],
+                "conflict_note": "Risk-On active with no shock regime active.",
+                "all_triggered": [5],
             }
 
-        # Fallback Rule: REJIMSIZ_GECIS
         return {
             "candidate_id": 0,
             "candidate_name": "REJIMSIZ_GECIS",
             "candidate_type": "TRANSITION",
-            "candidate_subtype": "Dengeli / Arafta Piyasa (Makro Sıkılık vs Finansal İyimserlik)",
+            "candidate_subtype": "Dengeli / Nötr Piyasa",
             "main_trigger_z": 0.0,
-            "conflict_note": "Makro baskı (Faiz %2.43, Petrol 2.66σ, NDL Z=-0.54) ile sakin piyasa (HY OAS -0.93σ, VIX 15.7) çatışması -> Dengeli Koruma Modu",
-            "all_triggered": []
+            "conflict_note": "No named regime currently satisfies its full confirmation rules.",
+            "all_triggered": [],
         }
 
-    def run_time_series(self, prepared_df: pd.DataFrame, custom_thresholds: Dict[str, float] = None) -> pd.DataFrame:
-        out = prepared_df.copy()
+    def run_time_series(self, prepared_df: pd.DataFrame, custom_thresholds: Optional[Dict[str, float]] = None) -> pd.DataFrame:
+        out = prepared_df.copy().sort_index()
         n = len(out)
+        defaults = {
+            "raw_candidate_id": 0,
+            "raw_candidate_name": "REJIMSIZ_GECIS",
+            "confirmed_regime_id": 0,
+            "confirmed_regime_name": "REJIMSIZ_GECIS",
+            "regime_type": "TRANSITION",
+            "regime_subtype": "Dengeli / Nötr Piyasa",
+            "hysteresis_days_left": 0,
+            "conflict_note": "",
+            "regime_cash_weight": 35.0,
+            "regime_gold_weight": 20.0,
+            "regime_bond_weight": 20.0,
+            "regime_eq_weight": 15.0,
+            "regime_commodity_weight": 5.0,
+            "regime_crypto_weight": 5.0,
+            "oil_event_score": 0.0,
+            "commodity_event_active": False,
+            "commodity_event_reason": "",
+            "unknown_event_score": 0.0,
+            "unknown_event_active": False,
+        }
+        for col, val in defaults.items():
+            out[col] = val
 
-        out['raw_candidate_id'] = 0
-        out['raw_candidate_name'] = "REJIMSIZ_GECIS"
-        out['confirmed_regime_id'] = 0
-        out['confirmed_regime_name'] = "REJIMSIZ_GECIS"
-        out['regime_type'] = "TRANSITION"
-        out['regime_subtype'] = "Dengeli / Nötr Piyasa"
-        out['hysteresis_days_left'] = 0
-        out['conflict_note'] = ""
-        out['regime_cash_weight'] = 35.0
-        out['regime_gold_weight'] = 20.0
-        out['regime_bond_weight'] = 20.0
-        out['regime_eq_weight'] = 15.0
-        out['regime_commodity_weight'] = 5.0
-        out['regime_crypto_weight'] = 5.0
-        out['oil_event_score'] = 0.0
-        out['commodity_event_active'] = False
-        out['commodity_event_reason'] = ''
-
-        current_confirmed_id = 0
-        current_confirmed_name = "REJIMSIZ_GECIS"
-        current_confirmed_type = "TRANSITION"
-        current_confirmed_subtype = "Dengeli / Nötr Piyasa"
-        hysteresis_counter = 0
+        current_id = 0
+        current_name = "REJIMSIZ_GECIS"
+        current_type = "TRANSITION"
+        current_subtype = "Dengeli / Nötr Piyasa"
+        hysteresis = 0
 
         for i in range(n):
             row = out.iloc[i]
             evals = self.evaluate_regimes_for_row(row, custom_thresholds=custom_thresholds)
             decision = self.resolve_conflicts(evals, row)
+            candidate_id = int(decision["candidate_id"])
 
-            c_id = decision['candidate_id']
-            c_name = decision['candidate_name']
-            c_type = decision['candidate_type']
-            c_subtype = decision['candidate_subtype']
-            c_note = decision['conflict_note']
+            out.at[out.index[i], "raw_candidate_id"] = candidate_id
+            out.at[out.index[i], "raw_candidate_name"] = decision["candidate_name"]
+            out.at[out.index[i], "conflict_note"] = decision["conflict_note"]
 
-            out.iat[i, out.columns.get_loc('raw_candidate_id')] = c_id
-            out.iat[i, out.columns.get_loc('raw_candidate_name')] = c_name
-            out.iat[i, out.columns.get_loc('conflict_note')] = c_note
-
-            if c_id != 0:
-                current_confirmed_id = c_id
-                current_confirmed_name = c_name
-                current_confirmed_type = c_type
-                current_confirmed_subtype = c_subtype
-                hysteresis_counter = self.hysteresis_days
+            hard_shock = self._hard_event_override(row)
+            if candidate_id != 0:
+                current_id = candidate_id
+                current_name = decision["candidate_name"]
+                current_type = decision["candidate_type"]
+                current_subtype = decision["candidate_subtype"]
+                hysteresis = self.hysteresis_days
+            elif hard_shock:
+                # A very extreme sensor is allowed to clear a stale regime state;
+                # it does not invent a named regime.
+                current_id = 0
+                current_name = "REJIMSIZ_GECIS"
+                current_type = "TRANSITION"
+                current_subtype = "Extreme Unclassified Event"
+                hysteresis = 0
+            elif hysteresis > 0:
+                hysteresis -= 1
             else:
-                if hysteresis_counter > 0:
-                    hysteresis_counter -= 1
-                else:
-                    current_confirmed_id = 0
-                    current_confirmed_name = "REJIMSIZ_GECIS"
-                    current_confirmed_type = "TRANSITION"
-                    current_confirmed_subtype = "Dengeli / Nötr Piyasa"
+                current_id = 0
+                current_name = "REJIMSIZ_GECIS"
+                current_type = "TRANSITION"
+                current_subtype = "Dengeli / Nötr Piyasa"
 
-            out.iat[i, out.columns.get_loc('confirmed_regime_id')] = current_confirmed_id
-            out.iat[i, out.columns.get_loc('confirmed_regime_name')] = current_confirmed_name
-            out.iat[i, out.columns.get_loc('regime_type')] = current_confirmed_type
-            out.iat[i, out.columns.get_loc('regime_subtype')] = current_confirmed_subtype
-            out.iat[i, out.columns.get_loc('hysteresis_days_left')] = hysteresis_counter
+            out.at[out.index[i], "confirmed_regime_id"] = current_id
+            out.at[out.index[i], "confirmed_regime_name"] = current_name
+            out.at[out.index[i], "regime_type"] = current_type
+            out.at[out.index[i], "regime_subtype"] = current_subtype
+            out.at[out.index[i], "hysteresis_days_left"] = hysteresis
 
-            # Compute portfolio weights using the confirmed regime plus the
-            # independent real-time commodity event overlay.
-            w = self.get_portfolio_weights(current_confirmed_id, current_confirmed_subtype, row=row)
-            out.iat[i, out.columns.get_loc('regime_cash_weight')] = w['cash']
-            out.iat[i, out.columns.get_loc('regime_gold_weight')] = w.get('gold', 20.0)
-            out.iat[i, out.columns.get_loc('regime_bond_weight')] = w['bond']
-            out.iat[i, out.columns.get_loc('regime_eq_weight')] = w['equity']
-            out.iat[i, out.columns.get_loc('regime_commodity_weight')] = w.get('commodity', w.get('oil', 5.0))
-            out.iat[i, out.columns.get_loc('regime_crypto_weight')] = w.get('crypto', w.get('btc', 5.0))
-            out.iat[i, out.columns.get_loc('oil_event_score')] = float(w.get('oil_event_score', 0.0))
-            out.iat[i, out.columns.get_loc('commodity_event_active')] = bool(w.get('commodity_event_active', False))
-            out.iat[i, out.columns.get_loc('commodity_event_reason')] = str(w.get('commodity_event_reason', ''))
+            weights = self.get_portfolio_weights(current_id, current_subtype, row=row)
+            for source, target in (
+                ("cash", "regime_cash_weight"),
+                ("gold", "regime_gold_weight"),
+                ("bond", "regime_bond_weight"),
+                ("equity", "regime_eq_weight"),
+                ("commodity", "regime_commodity_weight"),
+                ("crypto", "regime_crypto_weight"),
+            ):
+                out.at[out.index[i], target] = float(weights[source])
+            out.at[out.index[i], "oil_event_score"] = float(weights.get("oil_event_score", 0.0))
+            out.at[out.index[i], "commodity_event_active"] = bool(weights.get("commodity_event_active", False))
+            out.at[out.index[i], "commodity_event_reason"] = str(weights.get("commodity_event_reason", ""))
+            out.at[out.index[i], "unknown_event_score"] = float(weights.get("unknown_event_score", 0.0))
+            out.at[out.index[i], "unknown_event_active"] = bool(weights.get("unknown_event_active", False))
 
         return out
 
-    @staticmethod
-    def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
-        keys = ('cash', 'gold', 'bond', 'equity', 'commodity', 'crypto')
-        clean = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
-        total = sum(clean.values())
-        if total <= 1e-9:
-            clean = {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
-        elif abs(total - 100.0) > 1e-9:
-            clean = {k: v * 100.0 / total for k, v in clean.items()}
-        return clean
+    def _hard_event_override(self, row: pd.Series) -> bool:
+        cfg = self.config.get("event_overlay", {}).get("unknown_event", {})
+        if not bool(cfg.get("enabled", True)):
+            return False
+        threshold = float(cfg.get("hard_anomaly_z", 3.5))
+        sensors = [
+            abs(self._safe_float(row.get("vix_z"))),
+            abs(self._safe_float(row.get("hy_oas_z"))),
+            abs(self._safe_float(row.get("broad_dollar_5d_z"))),
+            abs(self._safe_float(row.get("usdjpy_1d_z"))),
+            abs(self._safe_float(row.get("tips_1d_z"))),
+        ]
+        return max(sensors, default=0.0) >= threshold
+
+    def _unknown_event_score(self, row: pd.Series) -> float:
+        cfg = self.config.get("event_overlay", {}).get("unknown_event", {})
+        if not bool(cfg.get("enabled", True)):
+            return 0.0
+        soft = float(cfg.get("soft_anomaly_z", 2.5))
+        hard = max(soft + 0.1, float(cfg.get("hard_anomaly_z", 3.5)))
+        peak = max(
+            abs(self._safe_float(row.get("vix_z"))),
+            abs(self._safe_float(row.get("hy_oas_z"))),
+            abs(self._safe_float(row.get("broad_dollar_5d_z"))),
+            abs(self._safe_float(row.get("usdjpy_1d_z"))),
+            abs(self._safe_float(row.get("tips_1d_z"))),
+        )
+        if not np.isfinite(peak) or peak <= soft:
+            return 0.0
+        return float(np.clip((peak - soft) / (hard - soft), 0.0, 1.0))
 
     def _oil_event_score(self, row: pd.Series) -> float:
         cfg = self.config.get("event_overlay", {}).get("oil", {})
         if not bool(cfg.get("enabled", True)):
             return 0.0
 
-        activation_z = float(cfg.get("activation_z", 0.75))
-        saturation_z = max(activation_z + 1e-6, float(cfg.get("saturation_z", 3.5)))
+        base_z = float(cfg.get("activation_z", 0.75))
+        saturation_z = max(base_z + 0.1, float(cfg.get("saturation_z", 3.5)))
+        percentile_gate = float(cfg.get("adaptive_percentile_gate", 80.0))
 
-        candidates = [
-            float(row.get('oil_ret_5d_z', 0.0)),
-            float(row.get('oil_ret_20d_z', 0.0)),
-            float(row.get('oil_trend_strength', row.get('oil_trend', 0.0)))
-        ]
-        shock = max(0.0, max(candidates))
-        if not np.isfinite(shock) or shock <= activation_z:
+        shock_z = max(
+            self._safe_float(row.get("oil_ret_5d_z")),
+            self._safe_float(row.get("oil_ret_20d_z")),
+            self._safe_float(row.get("oil_trend_strength", row.get("oil_trend", 0.0))),
+        )
+        move_pct = self._safe_float(row.get("oil_abs_5d_percentile"), 0.0)
+
+        if shock_z <= base_z and move_pct < percentile_gate:
             return 0.0
 
-        score = float(np.clip((shock - activation_z) / (saturation_z - activation_z), 0.0, 1.0))
-        breadth = float(row.get('commodity_breadth_20d', 0.0))
-        if np.isfinite(breadth) and breadth >= 0.50:
-            score = float(np.clip(score + 0.10, 0.0, 1.0))
-        return score
+        intensity = np.clip((max(shock_z, base_z) - base_z) / (saturation_z - base_z), 0.0, 1.0)
+        percentile_boost = 0.10 if move_pct >= percentile_gate else 0.0
+        breadth = self._safe_float(row.get("commodity_breadth_20d"), 0.0)
+        breadth_boost = 0.10 if breadth >= 0.50 else 0.0
+
+        quality = float(np.clip(self._safe_float(row.get("oil_event_quality_60d"), 0.5), 0.5, 1.0))
+        score = float(np.clip(intensity + percentile_boost + breadth_boost, 0.0, 1.0))
+        # Historical quality changes the size modestly, never gates a hard shock.
+        score *= 0.80 + 0.20 * quality
+        return float(np.clip(score, 0.0, 1.0))
 
     def _apply_event_overlays(self, base_weights: Dict[str, float], row: pd.Series, regime_id: int) -> Dict[str, Any]:
         w = self._normalize_weights(base_weights)
-        cfg = self.config.get("event_overlay", {}).get("oil", {})
-        score = self._oil_event_score(row)
-        activation_score = float(cfg.get("activation_score", 0.20))
+        oil_score = self._oil_event_score(row)
+        unknown_score = self._unknown_event_score(row)
+        overlay_cfg = self.config.get("event_overlay", {})
+        oil_cfg = overlay_cfg.get("oil", {})
+        unknown_cfg = overlay_cfg.get("unknown_event", {})
 
-        w['oil_event_score'] = score
-        w['commodity_event_active'] = False
-        w['commodity_event_reason'] = "No commodity event overlay active."
+        w["oil_event_score"] = oil_score
+        w["commodity_event_active"] = False
+        w["commodity_event_reason"] = "No commodity event overlay active."
+        w["unknown_event_score"] = unknown_score
+        w["unknown_event_active"] = unknown_score > 0.0
 
-        max_map = cfg.get("max_commodity_by_regime", {"0": 35.0, "1": 45.0, "2": 0.0, "3": 25.0, "4": 15.0, "5": 30.0})
+        # Systemic liquidity shock is an explicit hard risk-off state.
+        if regime_id == 2:
+            w["commodity_event_reason"] = "Systemic liquidity shock: commodity overlay disabled."
+            w = self._normalize_weights(w)
+            w.update(oil_event_score=oil_score, commodity_event_active=False, unknown_event_score=unknown_score, unknown_event_active=unknown_score > 0.0)
+            return w
+
+        # Unknown severe anomaly: do not invent direction; reduce exposure and
+        # preserve a meaningful cash buffer. This is a safety circuit, not a regime.
+        if unknown_score > float(unknown_cfg.get("activation_score", 0.25)) and regime_id == 0:
+            target_cash = float(unknown_cfg.get("minimum_cash", 50.0))
+            if w["cash"] < target_cash:
+                needed = target_cash - w["cash"]
+                take_eq = min(needed, w["equity"])
+                w["equity"] -= take_eq
+                w["cash"] += take_eq
+                needed -= take_eq
+                if needed > 0:
+                    take_crp = min(needed, w["crypto"])
+                    w["crypto"] -= take_crp
+                    w["cash"] += take_crp
+            w = self._normalize_weights(w)
+
+        activation_score = float(oil_cfg.get("activation_score", 0.20))
+        max_map = oil_cfg.get("max_commodity_by_regime", {"0": 35.0, "1": 45.0, "2": 0.0, "3": 20.0, "4": 15.0, "5": 25.0})
         max_commodity = float(max_map.get(str(regime_id), max_map.get("0", 35.0)))
 
-        # A systemic liquidity shock is handled by the emergency regime and
-        # explicitly does not chase a commodity spike.
-        if regime_id == 2:
-            w['commodity_event_reason'] = "Systemic liquidity shock: commodity overlay disabled."
-            return w
+        unknown_guard_active = (
+            regime_id == 0
+            and unknown_score > float(unknown_cfg.get("activation_score", 0.25))
+        )
 
-        if score < activation_score or max_commodity <= w['commodity']:
-            return w
+        if oil_score >= activation_score and max_commodity > w["commodity"]:
+            target = w["commodity"] + oil_score * (max_commodity - w["commodity"])
+            delta = max(0.0, target - w["commodity"])
+            eq_floor = float(oil_cfg.get("equity_floor_by_regime", {}).get(str(regime_id), 0.0))
+            cash_floor = float(oil_cfg.get("cash_floor_by_regime", {}).get(str(regime_id), 0.0))
+            if unknown_guard_active:
+                cash_floor = max(cash_floor, float(unknown_cfg.get("minimum_cash", 50.0)))
+                max_commodity = min(max_commodity, float(unknown_cfg.get("maximum_commodity", 20.0)))
+            eq_available = max(0.0, w["equity"] - eq_floor)
+            cash_available = max(0.0, w["cash"] - cash_floor)
 
-        target = w['commodity'] + score * (max_commodity - w['commodity'])
-        delta = max(0.0, target - w['commodity'])
+            eq_share = float(np.clip(oil_cfg.get("funding_from_equity", 0.70), 0.0, 1.0))
+            from_eq = min(delta * eq_share, eq_available)
+            from_cash = min(delta - from_eq, cash_available)
+            actual_delta = from_eq + from_cash
 
-        eq_funding_share = float(np.clip(cfg.get("funding_from_equity", 0.70), 0.0, 1.0))
-        eq_floor_map = cfg.get("equity_floor_by_regime", {})
-        cash_floor_map = cfg.get("cash_floor_by_regime", {})
-        eq_floor = float(eq_floor_map.get(str(regime_id), 0.0))
-        cash_floor = float(cash_floor_map.get(str(regime_id), 0.0))
-
-        eq_available = max(0.0, w['equity'] - eq_floor)
-        cash_available = max(0.0, w['cash'] - cash_floor)
-        available = eq_available + cash_available
-        delta = min(delta, available)
-
-        from_equity = min(delta * eq_funding_share, eq_available)
-        remaining = delta - from_equity
-        from_cash = min(remaining, cash_available)
-        remaining -= from_cash
-
-        if remaining > 1e-9:
-            # If the configured equity/cash floors prevent the requested target,
-            # scale back the commodity increase rather than violating the floors.
-            actual_delta = delta - remaining
-        else:
-            actual_delta = delta
-
-        w['equity'] -= from_equity
-        w['cash'] -= from_cash
-        w['commodity'] += actual_delta
+            w["equity"] -= from_eq
+            w["cash"] -= from_cash
+            w["commodity"] += actual_delta
+            w["commodity_event_active"] = actual_delta > 1e-9
+            w["commodity_event_reason"] = (
+                f"Independent oil event active: score={oil_score:.2f}, "
+                f"commodity allocation={w['commodity']:.2f}%."
+            )
 
         w = self._normalize_weights(w)
-        w['oil_event_score'] = score
-        w['commodity_event_active'] = bool(score >= activation_score and w['commodity'] > base_weights.get('commodity', 0.0) + 1e-6)
-        w['commodity_event_reason'] = (
-            f"Independent oil shock overlay active: score={score:.2f}, "
-            f"commodity target={w['commodity']:.2f}% (regime {regime_id})."
-        )
+        w["oil_event_score"] = oil_score
+        w["unknown_event_score"] = unknown_score
+        w["unknown_event_active"] = unknown_score > 0.0
         return w
 
-    def get_portfolio_weights(self, regime_id: int, subtype: str = "", row: pd.Series = None) -> Dict[str, Any]:
-        weights_map = {
-            # 1: Küresel Enflasyon & Stagflasyon Şoku
-            1: {"cash": 40.0, "gold": 25.0, "commodity": 30.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0},
-            # 2: Sistemik Likidite Şoku
-            2: {"cash": 95.0, "gold": 0.0, "commodity": 0.0, "bond": 5.0, "equity": 0.0, "crypto": 0.0},
-            # 3: Reel Faiz Şoku
-            3: {"cash": 67.26, "gold": 11.0, "commodity": 2.94, "bond": 10.0, "equity": 8.8, "crypto": 0.0},
-            # 4: Kredi Temerrüt Baskısı
-            4: {"cash": 65.0, "gold": 20.0, "commodity": 0.0, "bond": 15.0, "equity": 0.0, "crypto": 0.0},
-            # 5: Küresel Likidite Rallisi
-            5: {"cash": 10.0, "gold": 10.0, "commodity": 0.0, "bond": 0.0, "equity": 70.0, "crypto": 10.0},
-            # 0: REJIMSIZ_GECIS
-            0: {"cash": 35.0, "gold": 20.0, "commodity": 5.0, "bond": 20.0, "equity": 15.0, "crypto": 5.0}
-        }
-        base = weights_map.get(regime_id, weights_map[0])
-        base = self._normalize_weights(base)
-        if row is not None:
-            return self._apply_event_overlays(base, row, regime_id)
-        base['oil_event_score'] = 0.0
-        base['commodity_event_active'] = False
-        base['commodity_event_reason'] = "No live row supplied; regime weights only."
-        return base
+    @staticmethod
+    def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+        keys = ("cash", "gold", "bond", "equity", "commodity", "crypto")
+        clean = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
+        total = sum(clean.values())
+        if total <= 1e-12:
+            clean = {"cash": 100.0, "gold": 0.0, "bond": 0.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0}
+        elif abs(total - 100.0) > 1e-9:
+            clean = {k: v * 100.0 / total for k, v in clean.items()}
+        return clean
 
-    def get_asset_recommendations(self, regime_id: int, subtype: str = "") -> Dict[str, str]:
-        if regime_id == 1:
-            return {
-                "hisse": "⚠️ Yüksek Defansif / Değer Hisseleri (Enerji, Temettü)",
-                "tahvil": "❌ Negatif (Süreyi/Duration Sıfırla, T-Bill Kuponu)",
-                "kripto": "❌ Negatif / Aşırı Volatil (Risk Kes)",
-                "emtia": "🔥 Güçlü Al (Petrol, Rafine Ürünler, Tarım)",
-                "altin": "🔥 Pozitif / Stagflasyon Sigortası",
-                "nakit": "🛡️ Güvenli Liman (USD / Kısa Vadeli Repo)"
-            }
-        elif regime_id == 2:
-            return {
-                "hisse": "🚨 TAM ÇIKIŞ (Acil Durum Devre Kesici)",
-                "tahvil": "⚠️ Sadece Kısa Vadeli US T-Bill",
-                "kripto": "🚨 TAM ÇIKIŞ (Likidite Çöküşü Riski)",
-                "emtia": "❌ Sert Satış Riski",
-                "altin": "⚠️ Nakde Dönüş Sırasında Geçici Baskı",
-                "nakit": "🚨 %90-100 NAKİT & USD LİKİDİTESİ"
-            }
-        elif regime_id == 3:
-            return {
-                "hisse": "⚠️ Büyüme ve Teknoloji Hisselerinden Çık (Değer/Finans)",
-                "tahvil": "❌ Tahvillerde Süreyi Kısalt (Faiz Şoku Baskısı)",
-                "kripto": "❌ Negatif (Yüksek Reel Faiz Baskısı)",
-                "emtia": "⚪ Nötr / Seçici",
-                "altin": "⚠️ Yüksek Reel Getiri Altın Üzerinde Fırsat Maliyeti Yaratır",
-                "nakit": "🛡️ Cazip Getiri (Para Piyasası Fonları %5+)"
-            }
-        elif regime_id == 4:
-            return {
-                "hisse": "❌ Krediye Bağımlı Şirketlerden Çık",
-                "tahvil": "🔥 Sadece En Yüksek Kaliteli Devlet Tahvili (UST)",
-                "kripto": "❌ Temerrüt Dalgasında Likidite Kaçışı",
-                "emtia": "❌ Resesyon Baskısı",
-                "altin": "🔥 Güvenli Liman Talebi",
-                "nakit": "🛡️ Koruma Bütçesi (%60)"
-            }
-        elif regime_id == 5:
-            return {
-                "hisse": "🚀 TAM KAPASİTE BOĞA: Büyüme & Teknoloji",
-                "tahvil": "⚪ Nötr / Taşıma Getirisi (Carry)",
-                "kripto": "🚀 Agresif Al (Boğa Döngüsü)",
-                "emtia": "🔥 Sanayi Metalleri & Büyüme Emtiaları Al",
-                "altin": "🔥 Reflasyon Destekli (Özellikle Zayıf Dolarda)",
-                "nakit": "⚪ Minimum Nakit (Risk Bütçesini Kullan)"
-            }
-        else:
-            return {
-                "hisse": "⚠️ Düşük Ağırlık (%20) / Yalnızca Defansif ve Nakit Akışı Güçlü Şirketler",
-                "tahvil": "✅ Sabit Getiri (%35) / Kupon ve Yüksek Reel Faiz Getirisi",
-                "kripto": "❌ Risk Kes / Belirsizlikte Ağırlığı Sıfırla veya İzleme Modu",
-                "emtia": "⚖️ Nötr / Enerji Şoklarına Karşı Kısmi Koruma",
-                "altin": "🔥 Güvenli Liman & Portföy Sigortası (%15)",
-                "nakit": "🛡️ EN YÜKSEK AĞIRLIK (%45) / Para Piyasası Fonları ve Risksiz Getiri (%5+)"
-            }
+    def get_portfolio_weights(self, regime_id: int, subtype: str = "", row: Optional[pd.Series] = None) -> Dict[str, Any]:
+        weights_map = {
+            0: {"cash": 35.0, "gold": 20.0, "bond": 20.0, "equity": 15.0, "commodity": 5.0, "crypto": 5.0},
+            1: {"cash": 40.0, "gold": 25.0, "bond": 5.0, "equity": 0.0, "commodity": 30.0, "crypto": 0.0},
+            2: {"cash": 95.0, "gold": 0.0, "bond": 5.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0},
+            3: {"cash": 67.26, "gold": 11.0, "bond": 10.0, "equity": 8.80, "commodity": 2.94, "crypto": 0.0},
+            4: {"cash": 65.0, "gold": 20.0, "bond": 15.0, "equity": 0.0, "commodity": 0.0, "crypto": 0.0},
+            5: {"cash": 10.0, "gold": 10.0, "bond": 0.0, "equity": 70.0, "commodity": 0.0, "crypto": 10.0},
+        }
+        base = self._normalize_weights(weights_map.get(int(regime_id), weights_map[0]))
+        if row is None:
+            base.update(oil_event_score=0.0, commodity_event_active=False, commodity_event_reason="No live row supplied; regime weights only.", unknown_event_score=0.0, unknown_event_active=False)
+            return base
+        return self._apply_event_overlays(base, row, int(regime_id))
+
+    def get_event_snapshot(self, row: pd.Series) -> Dict[str, Any]:
+        oil_score = self._oil_event_score(row)
+        unknown_score = self._unknown_event_score(row)
+        return {
+            "oil_event_score": oil_score,
+            "oil_event_active": oil_score >= float(self.config.get("event_overlay", {}).get("oil", {}).get("activation_score", 0.20)),
+            "commodity_breadth_20d": self._safe_float(row.get("commodity_breadth_20d")),
+            "oil_event_quality_60d": self._safe_float(row.get("oil_event_quality_60d"), 0.5),
+            "unknown_event_score": unknown_score,
+            "unknown_event_active": unknown_score > 0.0,
+        }
