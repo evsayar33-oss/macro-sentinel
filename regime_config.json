@@ -559,9 +559,10 @@
     "allocation_source": "regimes[].default_allocation",
     "event_score_semantics": "confirmed_only",
     "pressure_score_separate": true,
-    "schema_version": "3.1",
-    "production_strategy_source": "adaptive_strategy_layer_v3",
-    "predictive_validation": "enabled_bounded_empirical"
+    "schema_version": "3.2",
+    "production_strategy_source": "adaptive_strategy_layer_v3_2",
+    "predictive_validation": "enabled_bounded_empirical",
+    "risk_appetite": "enabled_multi_horizon_persistent"
   },
   "research_strategies": {
     "enabled": true,
@@ -636,8 +637,8 @@
     },
     "production_candidate": "adaptive_strategy_layer_v3",
     "auto_parameter_mutation": false,
-    "production_validation_note": "Live engine uses the bounded adaptive-opportunity architecture; candidate parameters are fixed by config and are not auto-optimized from future outcomes.",
-    "production_strategy_layer": "adaptive_strategy_layer_v3",
+    "production_validation_note": "V3.2 adds bounded multi-horizon risk-appetite/tightening state and major-event detection. Learned predictive adjustments remain disabled until empirically calibrated.",
+    "production_strategy_layer": "adaptive_strategy_layer_v3_2",
     "adaptive_layer": {
       "enabled": true,
       "target_annual_vol": 0.085,
@@ -720,9 +721,14 @@
         "risk_cap_until_recovered": 0.35
       },
       "no_leverage": true,
-      "production_source_of_truth": "adaptive_strategy_layer_v3"
+      "production_source_of_truth": "adaptive_strategy_layer_v3_2",
+      "risk_appetite_enabled": true,
+      "risk_appetite_max_on_boost": 0.12,
+      "risk_appetite_max_off_reduction": 0.45,
+      "risk_appetite_cash_add_cap": 0.25
     },
-    "description": "Production uses bounded adaptive cross-asset allocation with capital-preservation governor. Daily audit is diagnostic; no unvalidated parameter mutation."
+    "description": "Production uses bounded adaptive cross-asset allocation with capital-preservation governor. Daily audit is diagnostic; no unvalidated parameter mutation.",
+    "production_source_of_truth": "adaptive_strategy_layer_v3_2"
   },
   "research_strategy_metrics_single_seed": {
     "Macro Sentinel Dynamic": {
@@ -785,5 +791,85 @@
     "point_in_time_only": true,
     "diagnostic_only_until_calibrated": true,
     "audit_updates_latest_row_after_decision": true
+  },
+  "risk_appetite": {
+    "enabled": true,
+    "horizons": [
+      5,
+      20,
+      60,
+      120,
+      252,
+      756
+    ],
+    "horizon_weights": {
+      "5": 0.08,
+      "20": 0.2,
+      "60": 0.27,
+      "120": 0.22,
+      "252": 0.15,
+      "756": 0.08
+    },
+    "risk_on_threshold": 60.0,
+    "risk_off_threshold": 40.0,
+    "persistent_persistence": 0.65,
+    "crisis_threshold": 22.0,
+    "major_event_threshold": 0.68,
+    "extreme_factor_z": 2.0,
+    "major_change_z": 2.0,
+    "minimum_factor_coverage": 5,
+    "minimum_long_horizon_points": 120,
+    "persistence_window_fast": 20,
+    "persistence_window_slow": 60,
+    "max_risk_on_boost": 0.12,
+    "max_risk_off_reduction": 0.45,
+    "asset_tilts": {
+      "RISK_ON_PERSISTENT": {
+        "equity": 1.12,
+        "crypto": 1.2,
+        "commodity": 1.05,
+        "gold": 0.92,
+        "bond": 0.92
+      },
+      "RISK_ON": {
+        "equity": 1.06,
+        "crypto": 1.1,
+        "commodity": 1.03,
+        "gold": 0.97,
+        "bond": 0.97
+      },
+      "NEUTRAL": {
+        "equity": 1.0,
+        "crypto": 1.0,
+        "commodity": 1.0,
+        "gold": 1.0,
+        "bond": 1.0
+      },
+      "RISK_OFF": {
+        "equity": 0.82,
+        "crypto": 0.62,
+        "commodity": 0.86,
+        "gold": 1.1,
+        "bond": 1.1
+      },
+      "RISK_OFF_PERSISTENT": {
+        "equity": 0.68,
+        "crypto": 0.45,
+        "commodity": 0.78,
+        "gold": 1.16,
+        "bond": 1.16
+      },
+      "CRISIS": {
+        "equity": 0.45,
+        "crypto": 0.25,
+        "commodity": 0.6,
+        "gold": 1.18,
+        "bond": 1.18
+      }
+    },
+    "point_in_time_only": true,
+    "event_requires_multi_factor_or_multi_horizon_shift": true,
+    "state_requires_persistence": true,
+    "description": "Observable market proxies for broad risk appetite and tightening. Not a direct measure of private bank, government or household intent."
   }
 }

@@ -1,5 +1,5 @@
 """
-Macro Sentinel V3.1 — daily predictive audit persistence.
+Macro Sentinel V3.2 — daily predictive audit persistence.
 
 Reads cms_history.csv, canonicalizes intraday history to one observation per
 calendar day inside the predictive engine, evaluates only matured 5/20 trading-

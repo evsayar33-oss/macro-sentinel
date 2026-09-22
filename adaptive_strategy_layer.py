@@ -1,5 +1,5 @@
 """
-Macro Sentinel V3.1 — Adaptive Cross-Asset Strategy + Predictive Validation.
+Macro Sentinel V3.2 — Adaptive Cross-Asset Strategy + Persistent Risk Appetite + Predictive Validation.
 
 Drop-in replacement for the existing adaptive_strategy_layer.py.
 Adds a bounded empirical predictive layer without changing the point-in-time
@@ -221,7 +221,13 @@ class AdaptiveStrategyLayer:
             clean += 1
         return any(flags), clean
 
-    def allocate(self, prepared_df: pd.DataFrame, classified_df: Optional[pd.DataFrame] = None, history: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    def allocate(
+        self,
+        prepared_df: pd.DataFrame,
+        classified_df: Optional[pd.DataFrame] = None,
+        history: Optional[pd.DataFrame] = None,
+        risk_appetite: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if prepared_df is None or prepared_df.empty:
             return {"weights": {"cash":100.0,"gold":0.0,"bond":0.0,"equity":0.0,"commodity":0.0,"crypto":0.0}, "strategy_mode":"CAPITAL_PRESERVATION_NO_DATA", "risk_budget_base":0.0, "risk_budget_final":0.0, "vol_scale":0.0, "opportunity_score":0.0, "asset_scores":{}, "available_asset_count":0, "stress_score":1.0,"stress_broad":True,"stress_hard":True,"stress_negative_breadth":1.0,"stress_median_return_20d":-1.0,"stress_avg_corr_40d":0.0,"stress_vix_percentile":100.0,"stress_ndl_z":-5.0,"stress_recovery_ready":False,"cash_floor":1.0,"unknown_guard_active":True,"oil_allocation_overlay":False,"oil_allocation_reason":"No data; risk not deployed.","stress_reason":"No prepared data available; capital preservation first.","decision_reason":"No prepared data available; capital preservation first."}
 
@@ -236,6 +242,33 @@ class AdaptiveStrategyLayer:
         top=max(scores.values()) if scores else 0.0; positive=sum(v>=0.60 for v in scores.values())
         if top>=0.72 and positive>=3 and not stress.broad_stress: risk += 0.08
         elif top<0.45 or positive<=1: risk -= 0.08
+
+        # V3.2 persistent risk-appetite state. Hard capital-preservation guards
+        # below remain authoritative and can override this bounded adjustment.
+        ra = risk_appetite or {}
+        ra_state = str(ra.get("risk_appetite_state", "NEUTRAL"))
+        ra_score = self._num(ra.get("risk_appetite_score"), 50.0)
+        ra_conf = float(np.clip(self._num(ra.get("risk_appetite_confidence"), 0.0), 0.0, 1.0))
+        ra_adj = float(np.clip(self._num(ra.get("risk_appetite_risk_budget_multiplier"), 1.0), 0.30, 1.12))
+        ra_cash_add = float(np.clip(self._num(ra.get("risk_appetite_cash_floor_add"), 0.0), 0.0, 0.25))
+        ra_reason = str(ra.get("risk_appetite_allocation_reason", "Risk-appetite state unavailable; no structural adjustment."))
+
+        # Backward-compatible fallback when allocate() is called without a
+        # pre-computed risk-appetite allocation adjustment.
+        if "risk_appetite_risk_budget_multiplier" not in ra:
+            if ra_state == "CRISIS":
+                ra_adj, ra_cash_add, ra_reason = 0.30, 0.25, "Risk-appetite CRISIS: structural capital-preservation governor."
+            elif ra_state == "RISK_OFF_PERSISTENT":
+                ra_adj, ra_cash_add, ra_reason = 0.60, 0.15, "Persistent risk-off state: structural risk budget compression."
+            elif ra_state == "RISK_OFF":
+                ra_adj, ra_cash_add, ra_reason = 0.82, 0.08, "Risk-off state: bounded risk-budget compression."
+            elif ra_state == "RISK_ON_PERSISTENT":
+                boost = min(0.12, 0.04 + 0.08 * ra_conf + 0.04 * max(0.0, (ra_score - 60.0) / 40.0))
+                ra_adj, ra_cash_add, ra_reason = 1.0 + boost, 0.0, "Persistent risk-on state: bounded risk-budget increase."
+            elif ra_state == "RISK_ON":
+                ra_adj, ra_cash_add, ra_reason = 1.03, 0.0, "Risk-on state: bounded risk-budget increase."
+
+        risk *= ra_adj
         if stress.hard_stress: risk=min(risk,self.stress["hard_risk_cap"])
         elif stress.broad_stress: risk*=self.stress["broad_risk_multiplier"]
         if rid==2: risk=min(risk,0.08)
@@ -248,6 +281,17 @@ class AdaptiveStrategyLayer:
         elif opportunity>=high and not stress.broad_stress: risk=min(self.max_risk_budget,risk+float(oppcfg.get("strong_opportunity_bonus",0.05)))
 
         sleeve=self._dynamic_weights(scores)
+
+        # Risk-appetite state changes the relative composition inside the deployed
+        # risk sleeve. This is not leverage; the total risk budget remains capped.
+        tilt_values = ra.get("risk_appetite_asset_tilts", {})
+        if isinstance(tilt_values, dict):
+            for asset in ASSET_KEYS:
+                sleeve[asset] *= float(np.clip(self._num(tilt_values.get(asset), 1.0), 0.50, 1.30))
+            tilt_total = sum(sleeve.values())
+            if tilt_total > 0:
+                sleeve = {k: v / tilt_total for k, v in sleeve.items()}
+
         predictive = self.predictor.evaluate(history, current_risk_score=max(stress.score,0.0), current_opportunity_score=opportunity, current_asset_scores=scores)
         det = predictive.deterioration_score
         risk, predictive_reason = self.predictor.adjust_risk(risk, predictive, stress.broad_stress, stress.hard_stress)
@@ -281,6 +325,7 @@ class AdaptiveStrategyLayer:
         elif oil_pressure>=0.20: oil_reason="Oil pressure monitored only; confirmed-event gate not met, so no oil-specific allocation boost."
 
         vol_scale=self._vol_scale(sleeve,returns); deploy=risk*vol_scale; cash_floor=float(self.min_cash_by_regime.get(str(rid),self.min_cash_by_regime.get("0",0.10)))
+        cash_floor = float(np.clip(cash_floor + ra_cash_add, 0.0, 0.95))
         if stress.hard_stress: deploy=min(deploy,self.stress["hard_risk_cap"]); cash_floor=max(cash_floor,self.stress["hard_cash_floor"])
         elif stress.broad_stress: deploy=min(deploy,self.stress["broad_risk_cap"]); cash_floor=max(cash_floor,self.stress["broad_cash_floor"])
         if self._truth(decision.get("unknown_event_active",False)): deploy=min(deploy,0.25); cash_floor=max(cash_floor,0.50)
@@ -300,11 +345,24 @@ class AdaptiveStrategyLayer:
                 if need<=1e-12: break
             oil_overlay=False; oil_reason="Hard synchronized cross-asset stress: capital preservation overrides oil allocation preference."
         weights=self._normalize(weights)
-        mode="CAPITAL_PRESERVATION_HARD_STRESS" if stress.hard_stress else "CAPITAL_PRESERVATION_BROAD_STRESS" if stress.broad_stress else "STAGED_REENTRY" if prior_stressed and not recovery else "ADAPTIVE_CROSS_ASSET_V3_1"
+        mode="CAPITAL_PRESERVATION_HARD_STRESS" if stress.hard_stress else "CAPITAL_PRESERVATION_BROAD_STRESS" if stress.broad_stress else "STAGED_REENTRY" if prior_stressed and not recovery else "ADAPTIVE_CROSS_ASSET_V3_2"
         return {
             "weights":weights,"strategy_mode":mode,"risk_budget_base":base,"risk_budget_final":deploy,"vol_scale":vol_scale,"opportunity_score":opportunity,"asset_scores":scores,"asset_availability":avail,"available_asset_count":available_count,
             "stress_score":stress.score,"stress_broad":stress.broad_stress,"stress_hard":stress.hard_stress,"stress_negative_breadth":stress.negative_breadth,"stress_median_return_20d":stress.median_return_20d,"stress_avg_corr_40d":stress.avg_corr_40d,"stress_vix_percentile":stress.vix_percentile,"stress_ndl_z":stress.ndl_z,"stress_recovery_ready":recovery,"cash_floor":cash_floor,
             "unknown_guard_active":self._truth(decision.get("unknown_event_active",False)),"oil_allocation_overlay":oil_overlay,"oil_allocation_reason":oil_reason,"stress_reason":stress.stress_reason,
+            "risk_appetite_score":float(np.clip(self._num(ra.get("risk_appetite_score"), 50.0), 0.0, 100.0)),
+            "risk_appetite_state":ra_state,
+            "risk_appetite_confidence":ra_conf,
+            "risk_appetite_persistence_20d":float(np.clip(self._num(ra.get("risk_appetite_persistence_20d"), 0.0), 0.0, 1.0)),
+            "risk_appetite_major_event_score":float(np.clip(self._num(ra.get("risk_appetite_major_event_score"), 0.0), 0.0, 1.0)),
+            "risk_appetite_major_event_active":bool(ra.get("risk_appetite_major_event_active", False)),
+            "risk_appetite_major_event_type":str(ra.get("risk_appetite_major_event_type", "NONE")),
+            "risk_appetite_tightening_score":float(np.clip(self._num(ra.get("risk_appetite_tightening_score"), 0.5), 0.0, 1.0)),
+            "risk_appetite_synchronized_stress":float(np.clip(self._num(ra.get("risk_appetite_synchronized_stress"), 0.0), 0.0, 1.0)),
+            "risk_appetite_risk_budget_multiplier":float(ra_adj),
+            "risk_appetite_cash_floor_add":float(ra_cash_add),
+            "risk_appetite_allocation_reason":ra_reason,
+            "risk_appetite_asset_tilts":dict(tilt_values) if isinstance(tilt_values, dict) else {},
             "predictive_status":predictive.status,"predictive_confidence":predictive.confidence,"predictive_matured_observations":predictive.matured_observations,"predictive_risk_bin_observations":predictive.risk_bin_observations,"predictive_opportunity_bin_observations":predictive.opportunity_bin_observations,"predictive_risk_probability_5d":predictive.risk_probability_5d,"predictive_expected_median_return_5d":predictive.expected_median_return_5d,"predictive_expected_loss_5d":predictive.expected_loss_5d,"predictive_opportunity_probability_20d":predictive.opportunity_probability_20d,"predictive_expected_opportunity_return_20d":predictive.expected_opportunity_return_20d,"predictive_deterioration_score":predictive.deterioration_score,"predictive_adjustment_reason":predictive_reason,"predictive_reason":predictive.reason,
-            "decision_reason":("Hard synchronized stress: cash governor active." if stress.hard_stress else "Broad cross-asset stress: risk budget compressed." if stress.broad_stress else "Staged re-entry: recent stress episode has not fully cleared." if prior_stressed and not recovery else "Adaptive cross-asset allocation with predictive risk/opportunity validation."),
+            "decision_reason":("Hard synchronized stress: cash governor active." if stress.hard_stress else "Broad cross-asset stress: risk budget compressed." if stress.broad_stress else "Persistent risk-off state: capital preservation prioritized." if ra_state in {"RISK_OFF_PERSISTENT", "CRISIS"} else "Persistent risk-on state: bounded growth-sensitive exposure enabled." if ra_state == "RISK_ON_PERSISTENT" else "Staged re-entry: recent stress episode has not fully cleared." if prior_stressed and not recovery else "Adaptive cross-asset allocation with V3.2 risk-appetite and predictive validation."),
         }

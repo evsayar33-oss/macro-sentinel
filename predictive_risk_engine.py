@@ -1,5 +1,5 @@
 """
-Macro Sentinel V3.1 — Predictive Risk / Opportunity Validation Engine.
+Macro Sentinel V3.2 — Predictive Risk / Opportunity Validation Engine.
 
 Point-in-time rule: only matured historical observations are allowed to inform
 current adaptive decisions. A signal at t can only use outcomes that are fully

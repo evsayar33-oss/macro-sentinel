@@ -1,5 +1,5 @@
 """
-Macro Sentinel v2.0 — point-in-time autonomous daily macro engine.
+Macro Sentinel V3.2 — point-in-time autonomous macro engine with persistent risk-appetite state.
 
 Runtime contract
 ----------------
@@ -26,6 +26,7 @@ import yfinance as yf
 
 from regime_engine import MacroRegimeEngine
 from adaptive_strategy_layer import AdaptiveStrategyLayer
+from risk_appetite_engine import RiskAppetiteEngine
 
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 EIA_API_KEY = os.getenv("EIA_API_KEY")
@@ -39,6 +40,7 @@ class UltimateSentinelEngine:
         self.base_url = "https://api.stlouisfed.org/fred/series/observations"
         self.regime_engine = MacroRegimeEngine()
         self.strategy_layer = AdaptiveStrategyLayer(self.regime_engine.config)
+        self.risk_appetite_engine = RiskAppetiteEngine(self.regime_engine.config)
         data_cfg = self.regime_engine.config.get("data_quality", {})
         self.min_history = int(data_cfg.get("minimum_history_days", 126))
         self.market_stale_days = int(data_cfg.get("market_max_stale_days", 3))
@@ -310,6 +312,37 @@ class UltimateSentinelEngine:
             elif int(meta.get("count", 0)) < 30:
                 warnings.append(f"short FRED history: {key}")
 
+        # Build an explicit sensor freshness matrix. This is informational for
+        # secondary sensors and blocking only for the configured core sensors.
+        freshness = {}
+        for ticker in core_yahoo:
+            if ticker in y_data.columns:
+                series = y_data[ticker].dropna()
+                last = series.index[-1] if not series.empty else None
+                age = (today_index.date() - pd.Timestamp(last).date()).days if last is not None else np.inf
+                freshness[ticker] = {"age_days": float(age), "ok": bool(age <= self.market_stale_days)}
+            else:
+                freshness[ticker] = {"age_days": np.inf, "ok": False}
+        for ticker in secondary_yahoo + energy_complements:
+            if ticker in y_data.columns:
+                series = y_data[ticker].dropna()
+                last = series.index[-1] if not series.empty else None
+                age = (today_index.date() - pd.Timestamp(last).date()).days if last is not None else np.inf
+                freshness[ticker] = {"age_days": float(age), "ok": bool(age <= max(self.market_stale_days, 7))}
+
+        fred_freshness = {}
+        for key in core_fred:
+            meta = fred_meta.get(key, {})
+            ok = bool(meta.get("ok")) and self._freshness(meta.get("last_date"), self.fred_stale_days)
+            fred_freshness[f"FRED:{key}"] = {"age_days": None, "ok": ok, "last_date": meta.get("last_date")}
+
+        fresh_ok = sum(1 for item in freshness.values() if item.get("ok")) + sum(1 for item in fred_freshness.values() if item.get("ok"))
+        fresh_total = len(freshness) + len(fred_freshness)
+        freshness_summary = " | ".join(
+            f"{k}={v.get('last_date') if v.get('last_date') else (f"{v.get('age_days'):.1f}d" if np.isfinite(v.get('age_days', np.inf)) else 'missing')}"
+            for k, v in list(freshness.items()) + list(fred_freshness.items())
+        )
+
         # Core data and optional event-data coverage are reported separately.
         if available_core < len(core_yahoo) or issues:
             status = "HALT"
@@ -327,6 +360,11 @@ class UltimateSentinelEngine:
             "event_coverage_status": event_coverage,
             "core_market_available": available_core,
             "core_market_required": len(core_yahoo),
+            "sensor_fresh_ok": int(fresh_ok),
+            "sensor_fresh_total": int(fresh_total),
+            "sensor_freshness": freshness,
+            "fred_freshness": fred_freshness,
+            "sensor_freshness_summary": freshness_summary,
             "issues": issues,
             "warnings": list(dict.fromkeys(warnings)),
             "source_notes": list(dict.fromkeys(source_notes)),
@@ -364,37 +402,13 @@ class UltimateSentinelEngine:
         now = datetime.now(IST_TZ)
         history = self._load_history()
 
-        # Scheduled production runs are weekdays. A manual weekend run must not
-        # masquerade as a fresh market decision using Friday prices.
-        if now.weekday() >= 5 and os.getenv("ALLOW_WEEKEND_RUN", "0").lower() not in {"1", "true", "yes"}:
-            prev = self._valid_previous_allocation(history)
-            if prev:
-                weights = {k: prev[k] for k in ("cash", "gold", "bond", "equity", "commodity", "crypto")}
-                carry = {k: v for k, v in prev.items() if k not in {"cash", "gold", "bond", "equity", "commodity", "crypto", "date"}}
-                if not history.empty:
-                    prev_row = history.iloc[-1]
-                    for field in (
-                        "regime_id", "regime_name", "regime_type", "regime_subtype", "regime_severity_source",
-                        "hysteresis_days_left", "pending_regime_id", "pending_regime_count",
-                        "oil_pressure_score", "oil_event_score", "oil_momentum_score", "oil_structural_score",
-                        "oil_structural_qualified", "oil_momentum_confirmed", "oil_event_type", "oil_event_active",
-                        "commodity_event_active", "commodity_event_reason", "unknown_event_score", "unknown_event_active",
-                        "unknown_guard_active", "oil_price", "brent_price", "oil_price_source", "brent_price_source",
-                        "vix3m_source", "eia_inventory_source", "daily_audit_status",
-                    ):
-                        if field in history.columns:
-                            carry[field] = prev_row[field]
-                carry["decision_note"] = "Market closed: last trusted state retained; no new market decision created."
-                return self._make_result(
-                    now=now,
-                    health={"status": "MARKET_CLOSED", "event_coverage_status": "NOT_EVALUATED", "issues": [], "warnings": ["Market calendar: weekend hold; no new allocation decision."], "source_notes": []},
-                    api_status="Market Closed",
-                    weights=weights,
-                    source="MARKET_CLOSED_HOLD",
-                    previous_date=prev.get("date", ""),
-                    history=history,
-                    extra=carry,
-                )
+        # V3.2 runs daily so 24/7 assets such as crypto and risk-appetite proxies
+        # can refresh on weekends too. Closed-market allocation is still held.
+        weekend_monitor = bool(
+            now.weekday() >= 5
+            and os.getenv("ALLOW_WEEKEND_RUN", "0").lower() not in {"1", "true", "yes"}
+        )
+        weekend_prev = self._valid_previous_allocation(history) if weekend_monitor else None
 
         fred_ids = {
             "fed": "WALCL",
@@ -603,14 +617,23 @@ class UltimateSentinelEngine:
         else:
             regime_status = "Teyit Edildi"
 
-        # Production allocation is owned by the V3 adaptive cross-asset layer.
-        # The macro engine still owns regime/event detection; the strategy layer
-        # converts those signals into a risk budget, asset selection, and cash
-        # preservation decision.
+        # V3.2 structural risk-appetite state. It combines short and long
+        # horizons and requires persistence for a long-lived state.
+        risk_appetite = self.risk_appetite_engine.evaluate(prepared, history=history)
+        ra_mult, ra_cash_add, ra_reason = self.risk_appetite_engine.allocation_adjustment(risk_appetite)
+        risk_appetite["risk_appetite_risk_budget_multiplier"] = float(ra_mult)
+        risk_appetite["risk_appetite_cash_floor_add"] = float(ra_cash_add)
+        risk_appetite["risk_appetite_allocation_reason"] = str(ra_reason)
+        risk_appetite["risk_appetite_asset_tilts"] = self.risk_appetite_engine.asset_tilts_for(risk_appetite)
+
+        # Production allocation is owned by the V3.2 adaptive cross-asset layer.
+        # Macro regime/event detection remains separate from the structural
+        # risk-appetite state and the empirical predictive validation layer.
         strategy_result = self.strategy_layer.allocate(
             prepared_df=prepared,
             classified_df=classified,
             history=history,
+            risk_appetite=risk_appetite,
         )
         weights_live = dict(strategy_result["weights"])
 
@@ -619,12 +642,23 @@ class UltimateSentinelEngine:
         # adaptive strategy decides the risk budget and whether an overlay is
         # actually permitted.
         event_snapshot = self.regime_engine.get_event_snapshot(latest)
-        emergency = bool(regime_id == 2)
+        emergency = bool(regime_id == 2 and not weekend_monitor)
         if emergency:
             # Preserve the existing macro hard-liquidity emergency contract.
             weights_live = {
                 "cash": 95.0, "gold": 0.0, "bond": 5.0,
                 "equity": 0.0, "commodity": 0.0, "crypto": 0.0,
+            }
+        elif weekend_monitor and weekend_prev:
+            # Weekend monitor: refresh sensors/risk state but never create a new
+            # allocation from Friday-closed markets.
+            weights_live = {
+                "cash": weekend_prev["cash"],
+                "gold": weekend_prev["gold"],
+                "bond": weekend_prev["bond"],
+                "equity": weekend_prev["equity"],
+                "commodity": weekend_prev["commodity"],
+                "crypto": weekend_prev["crypto"],
             }
 
         weights_live = self.regime_engine._normalize_weights(weights_live)
@@ -642,11 +676,24 @@ class UltimateSentinelEngine:
             "oil_event_type": str(event_snapshot.get("oil_event_type", "NONE")),
             "oil_event_active": bool(event_snapshot.get("oil_event_active", False)),
             "oil_qualification_reason": str(event_snapshot.get("oil_qualification_reason", "")),
-            "commodity_event_active": bool(strategy_result.get("oil_allocation_overlay", False)),
-            "commodity_event_reason": str(strategy_result.get("oil_allocation_reason", "No confirmed oil allocation overlay.")),
+            "commodity_event_active": bool(strategy_result.get("oil_allocation_overlay", False)) and not weekend_monitor,
+            "commodity_event_reason": (
+                "Weekend monitor: current event observed; allocation held."
+                if weekend_monitor and bool(strategy_result.get("oil_allocation_overlay", False))
+                else str(strategy_result.get("oil_allocation_reason", "No confirmed oil allocation overlay."))
+            ),
             "unknown_event_score": float(event_snapshot.get("unknown_event_score", 0.0)),
             "unknown_event_active": bool(event_snapshot.get("unknown_event_active", False)),
             "unknown_guard_active": bool(strategy_result.get("unknown_guard_active", False)),
+            "risk_appetite_score": float(risk_appetite.get("risk_appetite_score", 50.0)),
+            "risk_appetite_state": str(risk_appetite.get("risk_appetite_state", "NEUTRAL")),
+            "risk_appetite_confidence": float(risk_appetite.get("risk_appetite_confidence", 0.0)),
+            "risk_appetite_persistence_20d": float(risk_appetite.get("risk_appetite_persistence_20d", 0.0)),
+            "risk_appetite_major_event_score": float(risk_appetite.get("risk_appetite_major_event_score", 0.0)),
+            "risk_appetite_major_event_active": bool(risk_appetite.get("risk_appetite_major_event_active", False)),
+            "risk_appetite_major_event_type": str(risk_appetite.get("risk_appetite_major_event_type", "NONE")),
+            "risk_appetite_tightening_score": float(risk_appetite.get("risk_appetite_tightening_score", 0.5)),
+            "risk_appetite_synchronized_stress": float(risk_appetite.get("risk_appetite_synchronized_stress", 0.0)),
         })
 
         ml_confidence = int(np.clip(70.0 + float(np.nan_to_num(cms)) * 12.0, 20.0, 95.0))
@@ -659,12 +706,44 @@ class UltimateSentinelEngine:
             health=health,
             api_status="Online" if health["status"] == "HEALTHY" else "Degraded",
             weights=weights_live,
-            source="LIVE_ENGINE",
-            previous_date="",
+            source="MARKET_CLOSED_HOLD" if weekend_monitor else "LIVE_ENGINE",
+            previous_date=(weekend_prev.get("date", "") if weekend_monitor and weekend_prev else ""),
             history=history,
             extra={
                 "emergency": bool(emergency),
-                "strategy_mode": str(strategy_result.get("strategy_mode", "ADAPTIVE_STRATEGY_LAYER_V3")),
+                "decision_note": (
+                    "Weekend monitor: sensors and risk appetite refreshed; allocation retained from last trusted weekday state."
+                    if weekend_monitor else ""
+                ),
+                "risk_appetite_score": round(float(risk_appetite.get("risk_appetite_score", 50.0)), 4),
+                "risk_appetite_state": str(risk_appetite.get("risk_appetite_state", "NEUTRAL")),
+                "risk_appetite_confidence": round(float(risk_appetite.get("risk_appetite_confidence", 0.0)), 4),
+                "risk_appetite_persistence_20d": round(float(risk_appetite.get("risk_appetite_persistence_20d", 0.0)), 4),
+                "risk_appetite_on_persistence_20d": round(float(risk_appetite.get("risk_appetite_on_persistence_20d", 0.0)), 4),
+                "risk_appetite_off_persistence_20d": round(float(risk_appetite.get("risk_appetite_off_persistence_20d", 0.0)), 4),
+                "risk_appetite_on_persistence_60d": round(float(risk_appetite.get("risk_appetite_on_persistence_60d", 0.0)), 4),
+                "risk_appetite_off_persistence_60d": round(float(risk_appetite.get("risk_appetite_off_persistence_60d", 0.0)), 4),
+                "risk_appetite_risk_on_evidence": round(float(risk_appetite.get("risk_appetite_risk_on_evidence", 0.0)), 4),
+                "risk_appetite_risk_off_evidence": round(float(risk_appetite.get("risk_appetite_risk_off_evidence", 0.0)), 4),
+                "risk_appetite_multi_horizon_score": round(float(risk_appetite.get("risk_appetite_multi_horizon_score", 50.0)), 4),
+                "risk_appetite_shift_20d_z": round(float(risk_appetite.get("risk_appetite_shift_20d_z", 0.0)), 4),
+                "risk_appetite_shift_60d_z": round(float(risk_appetite.get("risk_appetite_shift_60d_z", 0.0)), 4),
+                "risk_appetite_major_event_score": round(float(risk_appetite.get("risk_appetite_major_event_score", 0.0)), 4),
+                "risk_appetite_major_event_active": bool(risk_appetite.get("risk_appetite_major_event_active", False)),
+                "risk_appetite_major_event_type": str(risk_appetite.get("risk_appetite_major_event_type", "NONE")),
+                "risk_appetite_tightening_score": round(float(risk_appetite.get("risk_appetite_tightening_score", 0.5)), 4),
+                "risk_appetite_liquidity_score": round(float(risk_appetite.get("risk_appetite_liquidity_score", 0.5)), 4),
+                "risk_appetite_credit_score": round(float(risk_appetite.get("risk_appetite_credit_score", 0.5)), 4),
+                "risk_appetite_volatility_score": round(float(risk_appetite.get("risk_appetite_volatility_score", 0.5)), 4),
+                "risk_appetite_growth_risk_score": round(float(risk_appetite.get("risk_appetite_growth_risk_score", 0.5)), 4),
+                "risk_appetite_synchronized_stress": round(float(risk_appetite.get("risk_appetite_synchronized_stress", 0.0)), 4),
+                "risk_appetite_risk_budget_multiplier": round(float(risk_appetite.get("risk_appetite_risk_budget_multiplier", 1.0)), 4),
+                "risk_appetite_cash_floor_add": round(float(risk_appetite.get("risk_appetite_cash_floor_add", 0.0)), 4),
+                "risk_appetite_allocation_reason": str(risk_appetite.get("risk_appetite_allocation_reason", "")),
+                "risk_appetite_available_factor_count": int(risk_appetite.get("risk_appetite_available_factor_count", 0)),
+                "risk_appetite_factor_count": int(risk_appetite.get("risk_appetite_factor_count", 0)),
+                "risk_appetite_source": str(risk_appetite.get("risk_appetite_source", "UNAVAILABLE")),
+                "strategy_mode": str(strategy_result.get("strategy_mode", "ADAPTIVE_STRATEGY_LAYER_V3_2")),
                 "strategy_risk_budget_base": round(float(strategy_result.get("risk_budget_base", 0.0)), 4),
                 "strategy_risk_budget_final": round(float(strategy_result.get("risk_budget_final", 0.0)), 4),
                 "strategy_deploy_risk": round(float(strategy_result.get("risk_budget_final", 0.0)), 4),
@@ -767,6 +846,9 @@ class UltimateSentinelEngine:
                 "data_health_issues": " | ".join(health["issues"]),
                 "data_health_warnings": " | ".join(health["warnings"]),
                 "data_source_notes": " | ".join(health.get("source_notes", [])),
+                "sensor_fresh_ok": int(health.get("sensor_fresh_ok", 0)),
+                "sensor_fresh_total": int(health.get("sensor_fresh_total", 0)),
+                "sensor_freshness_summary": str(health.get("sensor_freshness_summary", "")),
                 "oil_price_source": source_map.get("CL=F", "UNAVAILABLE"),
                 "brent_price_source": source_map.get("BZ=F", "UNAVAILABLE"),
                 "vix3m_source": source_map.get("^VIX3M", "UNAVAILABLE"),
@@ -830,6 +912,31 @@ class UltimateSentinelEngine:
             "strategy_asset_score_crypto": 0.0,
             "strategy_available_asset_count": 0,
             "strategy_decision_reason": "",
+            "risk_appetite_score": float(weights.get("risk_appetite_score", 50.0)),
+            "risk_appetite_state": str(weights.get("risk_appetite_state", "NEUTRAL")),
+            "risk_appetite_confidence": float(weights.get("risk_appetite_confidence", 0.0)),
+            "risk_appetite_persistence_20d": float(weights.get("risk_appetite_persistence_20d", 0.0)),
+            "risk_appetite_major_event_score": float(weights.get("risk_appetite_major_event_score", 0.0)),
+            "risk_appetite_major_event_active": bool(weights.get("risk_appetite_major_event_active", False)),
+            "risk_appetite_major_event_type": str(weights.get("risk_appetite_major_event_type", "NONE")),
+            "risk_appetite_tightening_score": float(weights.get("risk_appetite_tightening_score", 0.5)),
+            "risk_appetite_synchronized_stress": float(weights.get("risk_appetite_synchronized_stress", 0.0)),
+            "risk_appetite_risk_budget_multiplier": float(weights.get("risk_appetite_risk_budget_multiplier", 1.0)),
+            "risk_appetite_cash_floor_add": float(weights.get("risk_appetite_cash_floor_add", 0.0)),
+            "risk_appetite_allocation_reason": str(weights.get("risk_appetite_allocation_reason", "")),
+            "risk_appetite_on_persistence_20d": float(weights.get("risk_appetite_on_persistence_20d", 0.0)),
+            "risk_appetite_off_persistence_20d": float(weights.get("risk_appetite_off_persistence_20d", 0.0)),
+            "risk_appetite_on_persistence_60d": float(weights.get("risk_appetite_on_persistence_60d", 0.0)),
+            "risk_appetite_off_persistence_60d": float(weights.get("risk_appetite_off_persistence_60d", 0.0)),
+            "risk_appetite_multi_horizon_score": float(weights.get("risk_appetite_multi_horizon_score", 50.0)),
+            "risk_appetite_shift_20d_z": float(weights.get("risk_appetite_shift_20d_z", 0.0)),
+            "risk_appetite_shift_60d_z": float(weights.get("risk_appetite_shift_60d_z", 0.0)),
+            "risk_appetite_available_factor_count": int(weights.get("risk_appetite_available_factor_count", 0)),
+            "risk_appetite_factor_count": int(weights.get("risk_appetite_factor_count", 10)),
+            "risk_appetite_source": str(weights.get("risk_appetite_source", "UNAVAILABLE")),
+            "sensor_fresh_ok": int(weights.get("sensor_fresh_ok", health.get("sensor_fresh_ok", 0))),
+            "sensor_fresh_total": int(weights.get("sensor_fresh_total", health.get("sensor_fresh_total", 0))),
+            "sensor_freshness_summary": str(weights.get("sensor_freshness_summary", health.get("sensor_freshness_summary", ""))),
             "cms": 0.0,
             "ndl": 0.0,
             "g3_liq": np.nan,

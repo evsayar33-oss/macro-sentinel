@@ -1,12 +1,15 @@
 import json
 import os
+from datetime import datetime, timezone
+from io import StringIO
 
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 
 st.set_page_config(
-    page_title="Macro Sentinel v3.1",
+    page_title="Macro Sentinel v3.2",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -79,15 +82,52 @@ def ratio_pct(v):
     return "—" if not np.isfinite(v) else f"%{v * 100.0:.0f}"
 
 
-if not os.path.exists(HISTORY_FILE):
-    st.warning("cms_history.csv bulunamadı. GitHub Actions'ın ilk başarılı veri güncellemesini bekleyin.")
-    st.stop()
+GITHUB_RAW_HISTORY = os.getenv(
+    "CMS_HISTORY_GITHUB_RAW_URL",
+    "https://raw.githubusercontent.com/evsayar33-oss/macro-sentinel/main/cms_history.csv",
+)
 
-try:
-    df = pd.read_csv(HISTORY_FILE)
-except Exception as exc:
-    st.error(f"Geçmiş veri okunamadı: {exc}")
-    st.stop()
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_github_history(cache_bucket: int):
+    """Read the latest trusted history directly from GitHub.
+
+    The short cache prevents excessive requests while a small cache-buster
+    keeps the dashboard from remaining on an old raw-file CDN response.
+    """
+    url = f"{GITHUB_RAW_HISTORY}?cb={cache_bucket}"
+    try:
+        response = requests.get(
+            url,
+            timeout=10,
+            headers={"User-Agent": "Macro-Sentinel-Dashboard/3.2", "Cache-Control": "no-cache"},
+        )
+        response.raise_for_status()
+        data = pd.read_csv(StringIO(response.text))
+        if data.empty:
+            return pd.DataFrame(), "GITHUB_EMPTY", "GitHub history is empty."
+        return data, "GITHUB_LIVE", ""
+    except Exception as exc:
+        return pd.DataFrame(), "GITHUB_ERROR", str(exc)[:180]
+
+
+cache_bucket = int(datetime.now(timezone.utc).timestamp() // 120)
+remote_df, remote_status, remote_error = fetch_github_history(cache_bucket)
+if not remote_df.empty:
+    df = remote_df
+    history_source = "GITHUB_LIVE"
+else:
+    if not os.path.exists(HISTORY_FILE):
+        st.warning("GitHub history alınamadı ve yerel cms_history.csv bulunamadı.")
+        if remote_error:
+            st.caption(f"GitHub erişim notu: {remote_error}")
+        st.stop()
+    try:
+        df = pd.read_csv(HISTORY_FILE)
+        history_source = "LOCAL_FALLBACK"
+    except Exception as exc:
+        st.error(f"Geçmiş veri okunamadı: {exc}")
+        st.stop()
 
 if df.empty:
     st.info("Henüz kayıt yok.")
@@ -131,6 +171,21 @@ unknown_score = fnum(latest, "unknown_event_score", 0.0)
 unknown_active = bval(latest, "unknown_event_active")
 vix3m = fnum(latest, "vix_term", np.nan)
 
+risk_appetite_score = fnum(latest, "risk_appetite_score", 50.0)
+risk_appetite_state = text_or(latest, "risk_appetite_state", "NEUTRAL")
+risk_appetite_confidence = fnum(latest, "risk_appetite_confidence", 0.0)
+risk_appetite_persistence = fnum(latest, "risk_appetite_persistence_20d", 0.0)
+risk_appetite_shift20 = fnum(latest, "risk_appetite_shift_20d_z", 0.0)
+risk_appetite_shift60 = fnum(latest, "risk_appetite_shift_60d_z", 0.0)
+risk_appetite_major_score = fnum(latest, "risk_appetite_major_event_score", 0.0)
+risk_appetite_major_active = bval(latest, "risk_appetite_major_event_active")
+risk_appetite_major_type = text_or(latest, "risk_appetite_major_event_type", "NONE")
+risk_appetite_tightening = fnum(latest, "risk_appetite_tightening_score", 0.5)
+risk_appetite_sync = fnum(latest, "risk_appetite_synchronized_stress", 0.0)
+sensor_fresh_ok = int(fnum(latest, "sensor_fresh_ok", 0.0))
+sensor_fresh_total = int(fnum(latest, "sensor_fresh_total", 0.0))
+sensor_fresh_summary = text_or(latest, "sensor_freshness_summary", "Yok")
+
 # Health semantics: optional missing data should not visually imply that the
 # current decision is invalid when no critical issue blocked the engine.
 st.caption(f"Strateji profili: **{strategy_mode}** · Olay kapsamı: **{event_coverage}**")
@@ -161,8 +216,8 @@ elif regime_type == "CONSTRAINT":
 else:
     hero_color = "#ffd600"
 
-st.title("🏛️ Macro Sentinel V3")
-st.caption("Point-in-time makro rejim + bağımsız olay sensörleri + fail-closed allocation")
+st.title("🏛️ Macro Sentinel V3.2")
+st.caption("Point-in-time makro rejim + çok-zamanlı risk iştahı + büyük olay sensörleri + fail-closed allocation")
 
 st.markdown(
     f"""
@@ -171,6 +226,7 @@ st.markdown(
       &nbsp; | &nbsp; <b>Karar:</b> <span class="accent">{decision}</span>
       &nbsp; | &nbsp; <b>Karar Sağlığı:</b> <span class="{('ok' if decision_health == 'VALID' else 'warn' if decision_health == 'CAUTION' else 'bad')}">{decision_health}</span>
       &nbsp; | &nbsp; <b>Kaynak:</b> <span class="accent">{source}</span>
+      &nbsp; | &nbsp; <b>History Kaynağı:</b> <span class="accent">{history_source}</span>
       &nbsp; | &nbsp; <b>Son Güncelleme:</b> <span class="accent">{text_or(latest, 'date', 'N/A')}</span>
     </div>
     """,
@@ -264,6 +320,48 @@ if unknown_active:
         "Sistem yön tahmini uydurmak yerine risk azaltıcı guard uygulayabilir."
     )
 
+st.subheader("🧭 Risk Appetite / Tightening State — V3.2")
+ra1, ra2, ra3, ra4, ra5 = st.columns(5)
+with ra1:
+    st.metric("Risk İştahı", f"{risk_appetite_score:.0f}/100")
+with ra2:
+    st.metric("Durum", risk_appetite_state)
+with ra3:
+    st.metric("Güven", ratio_pct(risk_appetite_confidence))
+with ra4:
+    st.metric("Sıkılaşma", f"{risk_appetite_tightening:.2f}")
+with ra5:
+    st.metric("20g Süreklilik", ratio_pct(risk_appetite_persistence))
+
+ra_rows = [
+    ["Çok-zamanlı skor", f"{fnum(latest, 'risk_appetite_multi_horizon_score', 50.0):.1f}/100"],
+    ["Risk-on kanıtı", ratio_pct(fnum(latest, 'risk_appetite_risk_on_evidence', 0.0))],
+    ["Risk-off kanıtı", ratio_pct(fnum(latest, 'risk_appetite_risk_off_evidence', 0.0))],
+    ["20g değişim Z", zfmt(risk_appetite_shift20)],
+    ["60g değişim Z", zfmt(risk_appetite_shift60)],
+    ["Büyük olay skoru", f"{risk_appetite_major_score:.2f}"],
+    ["Büyük olay", risk_appetite_major_type if risk_appetite_major_active else "YOK"],
+    ["Eşzamanlı stres", f"{risk_appetite_sync:.2f}"],
+    ["Sensör tazeliği", f"{sensor_fresh_ok}/{sensor_fresh_total}" if sensor_fresh_total else "—"],
+]
+st.dataframe(pd.DataFrame(ra_rows, columns=["Risk Appetite metriği", "Değer"]), use_container_width=True, hide_index=True)
+if risk_appetite_major_active:
+    if risk_appetite_major_type == "RISK_ON_SHIFT":
+        st.success(f"📈 Büyük çok-faktörlü risk-on değişimi algılandı. Skor={risk_appetite_major_score:.2f}; karar kalıcı state/persistence ile birlikte değerlendirilir.")
+    else:
+        st.warning(f"⚠️ Büyük çok-faktörlü risk değişimi algılandı: {risk_appetite_major_type}. Skor={risk_appetite_major_score:.2f}.")
+else:
+    st.caption(f"Risk appetite açıklaması: {text_or(latest, 'risk_appetite_reason', 'Henüz hesaplanmadı')}")
+
+with st.expander("🔄 Veri Yenileme / Sensör Tazeliği", expanded=False):
+    st.write(f"History kaynağı: **{history_source}**")
+    st.write(f"GitHub remote okuma durumu: **{remote_status}**")
+    st.write(f"Son persisted gözlem: **{text_or(latest, 'date', 'N/A')}**")
+    st.write(f"Güncel sensörler: **{sensor_fresh_ok}/{sensor_fresh_total}**")
+    st.caption(sensor_fresh_summary)
+    if remote_error:
+        st.caption(f"Remote fallback notu: {remote_error}")
+
 st.subheader("🛡️ Strateji / Sermaye Koruma Motoru")
 sg1, sg2, sg3, sg4 = st.columns(4)
 with sg1:
@@ -277,7 +375,7 @@ with sg4:
     st.metric("Sermaye Koruma", stress_mode)
 
 st.caption(
-    f"Strateji durumu: {text_or(latest, 'strategy_mode', 'ADAPTIVE_STRATEGY_LAYER_V3')} · "
+    f"Strateji durumu: {text_or(latest, 'strategy_mode', 'ADAPTIVE_STRATEGY_LAYER_V3_2')} · "
     f"Stres: {text_or(latest, 'strategy_stress_reason', 'Belirlenmedi')}"
 )
 
@@ -290,7 +388,7 @@ score_rows = [
 ]
 st.dataframe(pd.DataFrame(score_rows, columns=["Varlık", "Fırsat Skoru"]), use_container_width=True, hide_index=True)
 
-st.subheader("🔮 Predictive Risk / Opportunity Validation — V3.1")
+st.subheader("🔮 Predictive Risk / Opportunity Validation — V3.2")
 pc1, pc2, pc3, pc4 = st.columns(4)
 with pc1:
     st.metric("Kalibrasyon", text_or(latest, "predictive_status", "WARMUP"))
