@@ -2,7 +2,8 @@ name: Macro Sentinel Autonomous Daily Update
 
 on:
   schedule:
-    - cron: '30 21 * * 1-5'
+    # Four scheduled refreshes per weekday (UTC): 09:45, 13:45, 17:45, 21:45 Türkiye.
+    - cron: '45 6,10,14,18 * * *'
   workflow_dispatch:
 
 permissions:
@@ -32,7 +33,7 @@ jobs:
           pip install -r requirements.txt
       - name: Static syntax check
         run: |
-          python -m py_compile main.py regime_engine.py app.py adaptive_strategy_layer.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py strategy_research.py strategy_stress_test.py predictive_risk_engine.py predictive_audit.py
+          python -m py_compile main.py regime_engine.py app.py adaptive_strategy_layer.py backtest_regimes.py stress_test_analysis.py find_better_strategies.py strategy_research.py strategy_stress_test.py predictive_risk_engine.py predictive_audit.py risk_appetite_engine.py
           python -m json.tool regime_config.json >/dev/null
       - name: Run live Macro Sentinel engine
         env:
@@ -43,6 +44,71 @@ jobs:
         run: python predictive_audit.py
       - name: Adaptive strategy regression test
         run: python strategy_stress_test.py
+      - name: Risk appetite invariant regression test
+        run: |
+          python - <<'PY'
+          import numpy as np
+          import pandas as pd
+          from risk_appetite_engine import RiskAppetiteEngine
+
+          n = 300
+          idx = pd.date_range('2025-01-01', periods=n, freq='B')
+          t = np.arange(n, dtype=float)
+          def trend(base, slope, noise=0.005):
+              return base * np.exp(slope*t + noise*np.sin(t/9.0))
+          df = pd.DataFrame({
+              'spx': trend(100, 0.0010),
+              'btc': trend(100, 0.0016),
+              'copper': trend(4, 0.0008),
+              'silver': trend(25, 0.0009),
+              'gold': trend(100, 0.0005),
+              'hy_oas': 5.0 - 0.001*t,
+              'vix': 22.0 - 0.01*t,
+              'broad_dollar': 100.0 - 0.01*t,
+              'tips10y': 1.8 - 0.002*t,
+              'ndl': 1_000_000 + 1000*t,
+              'usdjpy': 140 + 0.02*t,
+              'oil': trend(70, 0.0004),
+          }, index=idx)
+          e = RiskAppetiteEngine().evaluate(df)
+          required = ['risk_appetite_score','risk_appetite_confidence','risk_appetite_major_event_score','risk_appetite_tightening_score']
+          for k in required:
+              v = float(e[k])
+              if not np.isfinite(v):
+                  raise SystemExit(f'RISK APPETITE NONFINITE: {k}')
+          if not (0 <= e['risk_appetite_score'] <= 100): raise SystemExit('RISK APPETITE SCORE RANGE FAILURE')
+          if not (0 <= e['risk_appetite_confidence'] <= 1): raise SystemExit('RISK APPETITE CONFIDENCE RANGE FAILURE')
+          if not (0 <= e['risk_appetite_major_event_score'] <= 1): raise SystemExit('RISK APPETITE EVENT RANGE FAILURE')
+          if not (0 <= e['risk_appetite_tightening_score'] <= 1): raise SystemExit('RISK APPETITE TIGHTENING RANGE FAILURE')
+          m, c, reason = RiskAppetiteEngine().allocation_adjustment(e)
+          if not (0.3 <= m <= 1.12): raise SystemExit('RISK APPETITE MULTIPLIER RANGE FAILURE')
+          if not (0 <= c <= 0.25): raise SystemExit('RISK APPETITE CASH ADD RANGE FAILURE')
+          print(f'risk_appetite_state={e["risk_appetite_state"]}')
+          print(f'risk_appetite_score={e["risk_appetite_score"]:.2f}')
+          print('risk appetite invariant regression: PASS')
+          PY
+      - name: Data refresh integrity test
+        run: |
+          python - <<'PY'
+          import math
+          import pandas as pd
+          df = pd.read_csv('cms_history.csv')
+          if df.empty: raise SystemExit('cms_history.csv is empty')
+          row = df.iloc[-1]
+          status = str(row.get('decision_status','')).upper()
+          dt = pd.to_datetime(row.get('date'), errors='coerce')
+          if pd.isna(dt): raise SystemExit('INVALID LATEST HISTORY DATE')
+          now_local = pd.Timestamp.now(tz='Europe/Istanbul').tz_localize(None)
+          age_hours = (now_local - dt).total_seconds() / 3600.0
+          sensor_total = int(float(row.get('sensor_fresh_total',0) or 0))
+          sensor_ok = int(float(row.get('sensor_fresh_ok',0) or 0))
+          if sensor_total > 0 and not (0 <= sensor_ok <= sensor_total): raise SystemExit('SENSOR FRESHNESS COUNT FAILURE')
+          if status in {'LIVE','MARKET_CLOSED_HOLD'} and age_hours > 30.0: raise SystemExit(f'HISTORY REFRESH TOO OLD: {age_hours:.1f}h')
+          if status == 'LIVE' and not math.isfinite(sensor_ok): raise SystemExit('LIVE SENSOR HEALTH FAILURE')
+          print(f'latest_history={row.get("date")} age_hours={age_hours:.1f}')
+          print(f'sensor_freshness={sensor_ok}/{sensor_total}')
+          print('data refresh integrity: PASS')
+          PY
       - name: Predictive invariant regression test
         run: |
           python - <<'PY'
@@ -81,14 +147,21 @@ jobs:
           rp = float(row.get('predictive_risk_probability_5d',0.0) or 0.0)
           op = float(row.get('predictive_opportunity_probability_20d',0.0) or 0.0)
           det = float(row.get('predictive_deterioration_score',0.0) or 0.0)
+          ra_score = float(row.get('risk_appetite_score',50.0) or 50.0)
+          ra_conf = float(row.get('risk_appetite_confidence',0.0) or 0.0)
+          ra_event = float(row.get('risk_appetite_major_event_score',0.0) or 0.0)
+          ra_tight = float(row.get('risk_appetite_tightening_score',0.5) or 0.5)
           if ps not in {'WARMUP','CALIBRATED','DISABLED','NO_HISTORY'}: raise SystemExit('INVALID PREDICTIVE STATUS')
           if not (0<=conf<=1 and 0<=rp<=1 and 0<=op<=1 and 0<=det<=1): raise SystemExit('PREDICTIVE METRIC RANGE FAILURE')
+          if not (0<=ra_score<=100 and 0<=ra_conf<=1 and 0<=ra_event<=1 and 0<=ra_tight<=1): raise SystemExit('RISK APPETITE METRIC RANGE FAILURE')
           print(f'allocation_total={total:.4f}')
           print(f'predictive_status={ps}')
           print(f'predictive_confidence={conf:.3f}')
           print(f'predictive_risk_probability_5d={rp:.3f}')
           print(f'predictive_opportunity_probability_20d={op:.3f}')
           print(f'predictive_deterioration_score={det:.3f}')
+          print(f'risk_appetite_score={ra_score:.2f}')
+          print(f'risk_appetite_state={str(row.get("risk_appetite_state","NEUTRAL"))}')
           PY
       - name: Commit trusted history update
         run: |
